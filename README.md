@@ -1,17 +1,23 @@
 # Zellyfin customizations
 
-Personal Jellyfin customizations for the Windows AMD64 portable build of
-Jellyfin `10.11.11`. This repository contains reproducible source, patches,
-and deployment scripts. It intentionally does not contain a Jellyfin runtime,
-server data, credentials, media paths, databases, or generated preview images.
+Seek-aware playback statistics and large-library UI improvements for Jellyfin.
 
-## Features
+> **Compatibility:** Jellyfin Server and Jellyfin Web `10.11.11` on Windows
+> AMD64 portable. Patches are pinned to the matching upstream Web tag.
 
-- `Seek Statistics` server plugin that infers and stores forward/backward seek
-  events in a separate SQLite database.
-- `Seek count` library sorting in Jellyfin Web.
-- Infinite scrolling for the legacy library list view.
-- Inline media information on item detail pages.
+## Custom features
+
+| Feature | What it adds | Implementation |
+| --- | --- | --- |
+| **Seek statistics** | Counts forward and backward seeks per user, item, and playback session in a separate SQLite database. | Server plugin |
+| **Seek-count sorting** | Adds `Seek count` / `탐색 횟수` to the library sort menu, including ascending and descending order. | Server API + Web patch |
+| **Infinite library scrolling** | Automatically loads the next 100-item batch, making large libraries continuous instead of page-based. | Web patch |
+| **Inline media information** | Shows codec, resolution, bitrate, audio, and subtitle details directly on the item page. | Web patch |
+
+This repository contains the reproducible plugin source, Jellyfin Web patches,
+and Windows build/deployment scripts for those features. It intentionally does
+not contain a Jellyfin runtime, server data, credentials, private media paths,
+databases, or generated preview images.
 
 Seek events are inferred from playback progress position changes. They are not
 explicit seek events from every Jellyfin client, so delayed progress reports or
