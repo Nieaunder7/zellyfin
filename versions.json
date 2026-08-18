@@ -16,5 +16,10 @@
     "version": "1.0.0",
     "targetAbi": "10.11.0.0",
     "framework": "net9.0"
+  },
+  "duplicateMediaPlugin": {
+    "version": "1.4.0",
+    "targetAbi": "10.11.0.0",
+    "framework": "net9.0"
   }
 }

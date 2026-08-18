@@ -1,0 +1,12 @@
+---
+name: "Duplicate Media Scanner"
+guid: "1e9d32f0-6b73-4c1c-a127-8f0c2cc78a13"
+version: 2
+targetAbi: "10.11.0.0"
+framework: net9.0
+owner: "Nieaunder7"
+overview: "Find duplicate media candidates by normalized unique code"
+description: "Dashboard and scheduled tasks for duplicate media management and batched repair of missing chapters and chapter images."
+category: "Administration"
+artifacts:
+  - "Jellyfin.Plugin.DuplicateMedia.dll"

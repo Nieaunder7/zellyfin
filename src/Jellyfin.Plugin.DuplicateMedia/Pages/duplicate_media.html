@@ -1,0 +1,104 @@
+<div id="DuplicateMediaPage"
+     data-role="page"
+     class="page type-interior pluginConfigurationPage"
+     data-require="emby-button,emby-input,emby-select"
+     data-controller="__plugin/duplicate_media.js">
+    <div data-role="content">
+        <div class="content-primary" style="max-width: 110rem;">
+            <h2>중복 미디어 탐색</h2>
+            <p>
+                Jellyfin에 등록된 영상의 파일명과 상위 폴더에서 고유코드를 추출하여 중복 후보를 표시합니다.
+                검사는 파일을 변경하지 않습니다. 각 그룹에서 보존할 파일을 선택하면 나머지를 별도의 확인 절차 후 영구 삭제할 수 있습니다.
+            </p>
+            <p style="color:#ffb3b3;">
+                영구 삭제는 휴지통을 거치지 않으며 NAS에서도 복구할 수 없을 수 있습니다. 크기 기준 버튼은 선택 보조일 뿐 자동 삭제하지 않습니다.
+            </p>
+
+            <div style="display:flex; flex-wrap:wrap; gap:.75rem; margin:1rem 0;">
+                <button is="emby-button" type="button" class="raised button-submit emby-button" id="duplicateMediaScanButton">
+                    <span>읽기 전용 검사 시작</span>
+                </button>
+                <button is="emby-button" type="button" class="raised emby-button" id="duplicateMediaRefreshButton">
+                    <span>새로고침</span>
+                </button>
+                <button is="emby-button" type="button" class="raised emby-button" id="duplicateMediaExportButton">
+                    <span>CSV 내보내기</span>
+                </button>
+            </div>
+
+            <div id="duplicateMediaRunStatus" style="margin:.5rem 0 1rem;"></div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(12rem,1fr));gap:.75rem;margin-bottom:1.5rem;">
+                <div class="paperList" style="padding:1rem;"><div>중복 후보 그룹</div><strong id="duplicateMediaGroupCount">0</strong></div>
+                <div class="paperList" style="padding:1rem;"><div>후보 파일</div><strong id="duplicateMediaFileCount">0</strong></div>
+                <div class="paperList" style="padding:1rem;"><div>예상 절약 가능 용량</div><strong id="duplicateMediaSavings">0 B</strong></div>
+            </div>
+
+            <details style="margin-bottom:1.5rem;">
+                <summary style="cursor:pointer;font-weight:600;">고유코드 추출 설정</summary>
+                <form id="duplicateMediaConfigForm" style="margin-top:1rem;">
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="duplicateMediaPattern">정규식</label>
+                        <input id="duplicateMediaPattern" type="text" is="emby-input" />
+                        <div class="fieldDescription">
+                            prefix와 number 이름 그룹이 필요합니다. 기본값은 영문 3~5자와 숫자 2~7자의 조합입니다.
+                        </div>
+                    </div>
+                    <label style="display:flex;align-items:center;gap:.5rem;margin:1rem 0;">
+                        <input id="duplicateMediaIncludeParent" type="checkbox" />
+                        상위 폴더명에서도 고유코드 찾기
+                    </label>
+                    <button is="emby-button" type="submit" class="raised button-submit emby-button">
+                        <span>설정 저장</span>
+                    </button>
+                </form>
+            </details>
+
+            <div style="display:grid;grid-template-columns:minmax(12rem,2fr) minmax(10rem,1fr) minmax(10rem,1fr);gap:.75rem;align-items:end;">
+                <div class="inputContainer">
+                    <label class="inputLabel inputLabelUnfocused" for="duplicateMediaSearch">고유코드 검색</label>
+                    <input id="duplicateMediaSearch" type="search" is="emby-input" placeholder="예: SMOK-041" />
+                </div>
+                <div class="selectContainer">
+                    <label class="selectLabel" for="duplicateMediaClassification">분류</label>
+                    <select id="duplicateMediaClassification" is="emby-select">
+                        <option value="All">전체</option>
+                        <option value="LikelyDuplicate">유력 중복</option>
+                        <option value="AlternateEncode">다른 인코딩</option>
+                        <option value="Multipart">분할 영상</option>
+                    </select>
+                </div>
+                <div class="selectContainer">
+                    <label class="selectLabel" for="duplicateMediaStatus">검토 상태</label>
+                    <select id="duplicateMediaStatus" is="emby-select">
+                        <option value="All">전체</option>
+                        <option value="New">신규</option>
+                        <option value="Reviewed">검토 완료</option>
+                        <option value="Ignored">무시</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="paperList" style="padding:1rem;margin:1rem 0;">
+                <h3 style="margin-top:0;">일괄 보존 규칙</h3>
+                <p>아래 규칙은 현재 표시된 각 그룹에서 보존할 파일만 선택합니다. 즉시 삭제되지 않으며, 선택 결과를 검토한 뒤 별도로 영구 삭제해야 합니다.</p>
+                <div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;">
+                    <button is="emby-button" type="button" class="raised emby-button" id="duplicateMediaKeepLargestAll">각 그룹의 가장 큰 파일 보존</button>
+                    <button is="emby-button" type="button" class="raised emby-button" id="duplicateMediaKeepSmallestAll">각 그룹의 가장 작은 파일 보존</button>
+                    <button is="emby-button" type="button" class="raised emby-button" id="duplicateMediaClearKeepAll">보존 선택 초기화</button>
+                </div>
+                <div id="duplicateMediaBatchSummary" style="margin:1rem 0;">보존 파일을 선택한 그룹이 없습니다.</div>
+                <button is="emby-button" type="button" class="raised emby-button" id="duplicateMediaDeleteBatch" disabled
+                        style="background:#b3261e;color:#fff;">
+                    선택 그룹에서 보존 파일을 제외하고 영구 삭제
+                </button>
+            </div>
+
+            <div id="duplicateMediaResults" style="margin-top:1rem;"></div>
+            <div style="display:none;justify-content:center;gap:.75rem;margin:1.5rem 0;">
+                <button is="emby-button" type="button" class="raised emby-button" id="duplicateMediaPreviousButton">이전</button>
+                <span id="duplicateMediaPageLabel" style="align-self:center;"></span>
+                <button is="emby-button" type="button" class="raised emby-button" id="duplicateMediaNextButton">다음</button>
+            </div>
+        </div>
+    </div>
+</div>
