@@ -1,0 +1,30 @@
+{
+  "source": "Emby Server 4.x",
+  "target": "Jellyfin Server 10.11.11",
+  "libraries": [
+    {
+      "name": "Home Videos",
+      "collectionType": "homevideos",
+      "paths": [
+        "Z:\\Media\\HomeVideos"
+      ]
+    },
+    {
+      "name": "Personal Media",
+      "collectionType": "homevideos",
+      "paths": [
+        "D:\\Media\\Personal"
+      ]
+    }
+  ],
+  "excluded": [
+    {
+      "name": "Collections",
+      "reason": "Server-managed collection data, not an original media target path"
+    },
+    {
+      "name": "Playlists",
+      "reason": "Server-managed playlist data, not an original media target path"
+    }
+  ]
+}

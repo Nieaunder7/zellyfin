@@ -1,0 +1,88 @@
+diff --git a/src/components/itemMediaInfo/itemMediaInfo.js b/src/components/itemMediaInfo/itemMediaInfo.js
+index 5cc6bf4..c618b58 100644
+--- a/src/components/itemMediaInfo/itemMediaInfo.js
++++ b/src/components/itemMediaInfo/itemMediaInfo.js
+@@ -34,14 +34,13 @@ const copyButtonHtml = layoutManager.tv ? '' :
+         ><span class="material-icons content_copy" aria-hidden="true"></span></button>`;
+ const attributeDelimiterHtml = layoutManager.tv ? '' : '<span class="hide">: </span>';
+
+-function setMediaInfo(user, page, item) {
++export function renderMediaInfo(user, mediaInfoContent, item) {
+     let html = item.MediaSources.map(version => {
+         return getMediaSourceHtml(user, item, version);
+     }).join('<div style="border-top:1px solid #444;margin: 1em 0;"></div>');
+     if (item.MediaSources.length > 1) {
+         html = `<br/>${html}`;
+     }
+-    const mediaInfoContent = page.querySelector('#mediaInfoContent');
+     mediaInfoContent.innerHTML = html;
+
+     for (const btn of mediaInfoContent.querySelectorAll('.btnCopy')) {
+@@ -58,6 +57,10 @@ function setMediaInfo(user, page, item) {
+     }
+ }
+
++function setMediaInfo(user, page, item) {
++    renderMediaInfo(user, page.querySelector('#mediaInfoContent'), item);
++}
++
+ function getMediaSourceHtml(user, item, version) {
+     let html = '<div class="mediaInfoSource">';
+     if (version.Name) {
+diff --git a/src/controllers/itemDetails/index.html b/src/controllers/itemDetails/index.html
+index 882b812..c2f74e2 100644
+--- a/src/controllers/itemDetails/index.html
++++ b/src/controllers/itemDetails/index.html
+@@ -107,6 +107,11 @@
+                         </div>
+                     </form>
+
++                    <div class="inlineMediaInfoSection hide" style="margin: 1.5em 0;">
++                        <h2 class="sectionTitle">${MoreMediaInfo}</h2>
++                        <div class="inlineMediaInfoContent mediaInfoContent" style="width: auto; margin: 0;"></div>
++                    </div>
++
+                     <div class="recordingFields hide" style="margin: 0.5em 0 1.5em;"></div>
+
+                     <div class="detailSectionContent">
+diff --git a/src/controllers/itemDetails/index.js b/src/controllers/itemDetails/index.js
+index e425285..9282ae1 100644
+--- a/src/controllers/itemDetails/index.js
++++ b/src/controllers/itemDetails/index.js
+@@ -14,6 +14,7 @@ import confirm from 'components/confirm/confirm';
+ import imageLoader from 'components/images/imageLoader';
+ import itemContextMenu from 'components/itemContextMenu';
+ import itemHelper from 'components/itemHelper';
++import { renderMediaInfo as renderDetailedMediaInfo } from 'components/itemMediaInfo/itemMediaInfo';
+ import mediaInfo from 'components/mediainfo/mediainfo';
+ import layoutManager from 'components/layoutManager';
+ import listView from 'components/listview/listview';
+@@ -226,6 +227,20 @@ function renderTrackSelections(page, instance, item, forceReload) {
+     }
+ }
+
++function renderInlineMediaInfo(page, item, user) {
++    const section = page.querySelector('.inlineMediaInfoSection');
++    const content = page.querySelector('.inlineMediaInfoContent');
++
++    if (!item.MediaSources?.length) {
++        content.innerHTML = '';
++        section.classList.add('hide');
++        return;
++    }
++
++    renderDetailedMediaInfo(user, content, item);
++    section.classList.remove('hide');
++}
++
+ function renderVideoSelections(page, mediaSources) {
+     const mediaSource = getSelectedMediaSource(page, mediaSources);
+
+@@ -565,6 +580,7 @@ function reloadFromItem(instance, page, params, item, user) {
+     renderName(item, page.querySelector('.nameContainer'), params.context);
+     renderDetails(page, item, apiClient, params.context);
+     renderTrackSelections(page, instance, item);
++    renderInlineMediaInfo(page, item, user);
+
+     renderSeriesTimerEditor(page, item, apiClient, user);
+     renderTimerEditor(page, item, apiClient, user);

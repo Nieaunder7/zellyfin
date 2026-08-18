@@ -1,0 +1,229 @@
+diff --git a/src/controllers/list.js b/src/controllers/list.js
+index a4814a3..db12cb5 100644
+--- a/src/controllers/list.js
++++ b/src/controllers/list.js
+@@ -5,7 +5,6 @@ import focusManager from '../components/focusManager';
+ import cardBuilder from '../components/cardbuilder/cardBuilder';
+ import loading from '../components/loading/loading';
+ import AlphaNumericShortcuts from '../scripts/alphanumericshortcuts';
+-import libraryBrowser from '../scripts/libraryBrowser';
+ import { playbackManager } from '../components/playback/playbackmanager';
+ import AlphaPicker from '../components/alphaPicker/alphaPicker';
+ import { ServerConnections } from 'lib/jellyfin-apiclient';
+@@ -16,6 +15,25 @@ import { CollectionType } from '@jellyfin/sdk/lib/generated-client/models/collec
+ import { ItemSortBy } from '@jellyfin/sdk/lib/generated-client/models/item-sort-by';
+ import { stopMultiSelect } from 'components/multiSelect/multiSelect';
+
++const SEEK_COUNT_SORT = 'SeekCount';
++
++function getSeekCountItems(instance, params, item, startIndex, limit) {
++    const apiClient = ServerConnections.getApiClient(params.serverId);
++    const sortValues = instance.getSortValues();
++    const query = modifyQueryWithFilters(instance, {
++        StartIndex: startIndex,
++        Limit: limit,
++        Fields: 'PrimaryImageAspectRatio,SortName,Path,ChildCount,MediaSourceCount',
++        ImageTypeLimit: 1,
++        ParentId: item ? item.Id : params.parentId,
++        IncludeItemTypes: 'Video',
++        Recursive: true,
++        SortOrder: sortValues.sortOrder
++    });
++
++    return apiClient.getJSON(apiClient.getUrl('SeekStatistics/Items', query));
++}
++
+ function getInitialLiveTvQuery(instance, params, startIndex = 0, limit = 300) {
+     const query = {
+         UserId: ServerConnections.getApiClient(params.serverId).getCurrentUserId(),
+@@ -239,6 +257,10 @@ function updateAlphaPickerState(instance) {
+ function getItems(instance, params, item, sortBy, startIndex, limit) {
+     const apiClient = ServerConnections.getApiClient(params.serverId);
+
++    if ((sortBy || instance.getSortValues().sortBy) === SEEK_COUNT_SORT) {
++        return getSeekCountItems(instance, params, item, startIndex, limit);
++    }
++
+     instance.queryRecursive = false;
+     if (params.type === 'Recordings') {
+         return apiClient.getLiveTvRecordings(getInitialLiveTvQuery(instance, params, startIndex, limit));
+@@ -452,62 +474,76 @@ class ItemsView {
+         }
+
+         let isLoading = false;
+-
+-        function onNextPageClick() {
+-            if (!isLoading && query.Limit > 0) {
+-                query.StartIndex += query.Limit;
+-                self.itemsContainer.refreshItems().then(() => {
+-                    window.scrollTo(0, 0);
+-                    autoFocus();
+-                });
++        let loadedItems = [];
++        let totalRecordCount = 0;
++        let infiniteScrollObserver;
++
++        function disconnectInfiniteScrollObserver() {
++            if (infiniteScrollObserver) {
++                infiniteScrollObserver.disconnect();
++                infiniteScrollObserver = null;
+             }
+         }
+
+-        function onPreviousPageClick() {
+-            if (!isLoading && query.Limit > 0) {
+-                query.StartIndex = Math.max(0, query.StartIndex - query.Limit);
+-                self.itemsContainer.refreshItems().then(() => {
+-                    window.scrollTo(0, 0);
+-                    autoFocus();
+-                });
++        function loadNextPage() {
++            if (!isLoading && query.Limit > 0 && loadedItems.length < totalRecordCount) {
++                query.StartIndex = loadedItems.length;
++                self.itemsContainer.refreshItems();
+             }
+         }
+
+-        function updatePaging(startIndex, totalRecordCount, limit) {
+-            const pagingHtml = libraryBrowser.getQueryPagingHtml({
+-                startIndex,
+-                limit,
+-                totalRecordCount,
+-                showLimit: false,
+-                updatePageSizeSetting: false,
+-                addLayoutButton: false,
+-                sortButton: false,
+-                filterButton: false
+-            });
++        function updatePaging(startIndex, itemCount, limit) {
++            disconnectInfiniteScrollObserver();
+
+-            for (const elem of view.querySelectorAll('.paging')) {
+-                elem.innerHTML = pagingHtml;
++            const pagingElements = view.querySelectorAll('.paging');
++            for (const elem of pagingElements) {
++                elem.innerHTML = '';
+             }
+
+-            for (const elem of view.querySelectorAll('.btnNextPage')) {
+-                elem.addEventListener('click', onNextPageClick);
++            if (!limit || startIndex + itemCount >= totalRecordCount || !pagingElements.length) {
++                return;
+             }
+
+-            for (const elem of view.querySelectorAll('.btnPreviousPage')) {
+-                elem.addEventListener('click', onPreviousPageClick);
+-            }
++            const sentinel = document.createElement('div');
++            sentinel.className = 'infiniteScrollSentinel';
++            sentinel.setAttribute('aria-hidden', 'true');
++            sentinel.style.minHeight = '1px';
++            pagingElements[pagingElements.length - 1].appendChild(sentinel);
++
++            infiniteScrollObserver = new IntersectionObserver(entries => {
++                if (entries.some(entry => entry.isIntersecting)) {
++                    loadNextPage();
++                }
++            }, {
++                rootMargin: '600px 0px'
++            });
++            infiniteScrollObserver.observe(sentinel);
+         }
+
+         function fetchData() {
+             isLoading = true;
+
+             return getItems(self, params, self.currentItem, null, query.StartIndex, query.Limit).then(function (result) {
+-                if (self.totalItemCount == null) {
+-                    self.totalItemCount = result.Items ? result.Items.length : result.length;
++                const newItems = result.Items || result;
++                const resultStartIndex = result.StartIndex || 0;
++
++                if (resultStartIndex === 0) {
++                    loadedItems = newItems;
++                } else {
++                    loadedItems = loadedItems.concat(newItems);
+                 }
+
++                totalRecordCount = result.TotalRecordCount ?? loadedItems.length;
++                self.totalItemCount = totalRecordCount;
++
+                 updateAlphaPickerState(self);
+-                updatePaging(result.StartIndex, result.TotalRecordCount, query.Limit);
++                updatePaging(resultStartIndex, newItems.length, query.Limit);
++
++                if (result.Items) {
++                    result.Items = loadedItems;
++                    result.StartIndex = 0;
++                }
++
+                 return result;
+             }).finally(() => {
+                 isLoading = false;
+@@ -795,12 +831,6 @@ class ItemsView {
+             }
+         }
+
+-        function autoFocus() {
+-            import('../components/autoFocuser').then(({ default: autoFocuser }) => {
+-                autoFocuser.autoFocus(view);
+-            });
+-        }
+-
+         const self = this;
+         self.params = params;
+         this.itemsContainer = view.querySelector('.itemsContainer');
+@@ -932,6 +962,7 @@ class ItemsView {
+             });
+         });
+         view.addEventListener('viewhide', function () {
++            disconnectInfiniteScrollObserver();
+             const itemsContainer = self.itemsContainer;
+
+             if (itemsContainer) {
+@@ -946,6 +977,7 @@ class ItemsView {
+             }
+         });
+         view.addEventListener('viewdestroy', function () {
++            disconnectInfiniteScrollObserver();
+             if (self.listController) {
+                 self.listController.destroy();
+             }
+@@ -1062,6 +1094,13 @@ class ItemsView {
+             sortBy.push(option);
+         }
+
++        if (this.params.type !== 'Programs') {
++            sortBy.push({
++                name: globalize.translate('SeekCount'),
++                value: SEEK_COUNT_SORT
++            });
++        }
++
+         sortBy.push({
+             name: globalize.translate('ReleaseDate'),
+             value: [ItemSortBy.ProductionYear, ItemSortBy.PremiereDate, ItemSortBy.SortName].join(',')
+diff --git a/src/strings/en-us.json b/src/strings/en-us.json
+index 28fbf0b..077be9d 100644
+--- a/src/strings/en-us.json
++++ b/src/strings/en-us.json
+@@ -1387,6 +1387,7 @@
+     "PlaybackErrorPlaceHolder": "This is a placeholder for physical media that Jellyfin cannot play. Please insert the disc to play.",
+     "PlaybackRate": "Playback Speed",
+     "PlayCount": "Play count",
++    "SeekCount": "Seek count",
+     "Played": "Played",
+     "PlayFromBeginning": "Play from beginning",
+     "PlaylistError.AddFailed": "Error adding to playlist",
+diff --git a/src/strings/ko.json b/src/strings/ko.json
+index ec9f8c1..5bcf719 100644
+--- a/src/strings/ko.json
++++ b/src/strings/ko.json
+@@ -781,6 +781,7 @@
+     "PlayNext": "다음 재생",
+     "PlayFromBeginning": "처음부터 재생",
+     "PlayCount": "재생 횟수",
++    "SeekCount": "탐색 횟수",
+     "Overview": "개요",
+     "OptionSubstring": "Substring",
+     "OptionProtocolHttp": "HTTP",

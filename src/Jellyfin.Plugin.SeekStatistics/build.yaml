@@ -1,0 +1,12 @@
+---
+name: "Seek Statistics"
+guid: "7ef8c86b-034a-4ca7-9bdb-2d2aa57c9166"
+version: 1
+targetAbi: "10.11.0.0"
+framework: net9.0
+owner: "Nieaunder7"
+overview: "Collect inferred seeking activity during playback"
+description: "Tracks playback position discontinuities and stores seek events separately from the Jellyfin database."
+category: "Administration"
+artifacts:
+  - "Jellyfin.Plugin.SeekStatistics.dll"

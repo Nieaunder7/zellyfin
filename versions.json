@@ -1,0 +1,20 @@
+{
+  "jellyfin": {
+    "version": "10.11.11",
+    "platform": "windows-amd64-portable",
+    "archive": "jellyfin_10.11.11-amd64.zip",
+    "sha256": "3B5D3E904415AC6BD2C0EE9FE93235B4145D41C4C85AE782D244AC9767F77374"
+  },
+  "jellyfinWeb": {
+    "tag": "v10.11.11",
+    "patches": [
+      "patches/jellyfin-web-10.11.11-seek-sort-infinite-scroll.patch",
+      "patches/jellyfin-web-10.11.11-inline-media-info.patch"
+    ]
+  },
+  "seekStatisticsPlugin": {
+    "version": "1.0.0",
+    "targetAbi": "10.11.0.0",
+    "framework": "net9.0"
+  }
+}

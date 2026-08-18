@@ -1,0 +1,30 @@
+# Live Jellyfin installation, configuration, databases, caches, logs, media
+# previews, plugins, and backups. Never publish this directory.
+/runtime/
+
+# Reproducible build inputs and outputs.
+/build/
+/artifacts/
+**/bin/
+**/obj/
+
+# This local migration manifest contains real media paths. Start from the
+# redacted example in examples/ instead.
+/migration/emby-library-paths.json
+
+# Superseded by the combined seek-sort/infinite-scroll patch. Kept locally for
+# reference but omitted from the reproducible public patch set.
+/patches/jellyfin-web-10.11.11-seek-sort.patch
+
+# Local and editor artifacts.
+*.log
+*.db
+*.db-shm
+*.db-wal
+*.user
+*.suo
+.vs/
+.idea/
+.vscode/
+Thumbs.db
+Desktop.ini
