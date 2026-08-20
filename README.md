@@ -11,6 +11,7 @@ server data, credentials, media paths, databases, or generated preview images.
   events in a separate SQLite database.
 - `Seek count` library sorting in Jellyfin Web.
 - Infinite scrolling for the legacy library list view.
+- Flat recursive video listing for Home Videos libraries, without folder cards, including working play-all, shuffle, and restored infinite scrolling after playback.
 - Inline media information on item detail pages.
 - Read-only duplicate-media dashboard that groups indexed videos by normalized
   unique code and never deletes, moves, or renames media files during scanning.
@@ -106,6 +107,33 @@ without modifying source media files.
 > **Service impact:** Git operations and documentation changes do not affect a
 > running server. The build/install scripts intentionally stop and restart the
 > local Jellyfin process while deploying files.
+
+## Windows service
+
+The portable server can be converted to a delayed-auto-start Windows service
+without moving `runtime/data`. Open PowerShell as Administrator and run:
+
+```powershell
+Set-Location C:\path\to\zellyfin
+.\scripts\install-jellyfin-service.ps1
+```
+
+The installer downloads the Windows-compatible NSSM 2.24-101 wrapper from the
+official NSSM site, verifies its published SHA-1, and prompts for the Windows
+account password. The password is passed to the Windows Service Control Manager
+and is never written to a project file. A Windows Hello PIN is not accepted.
+The service runs as that user so its saved NAS credential can reconnect `Z:` to
+`\\192.168.219.102\video` before Jellyfin starts. The existing Startup shortcut
+is disabled only after service configuration and restored automatically if the
+health check on port 8097 fails.
+
+To remove only the service and restore interactive startup:
+
+```powershell
+.\scripts\uninstall-jellyfin-service.ps1 -RestoreStartupShortcut
+```
+
+Neither operation deletes Jellyfin data, plugins, caches, or media files.
 
 ## Optional Emby library-path import
 

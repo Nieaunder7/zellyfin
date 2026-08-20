@@ -47,7 +47,20 @@ index a4814a3..db12cb5 100644
      instance.queryRecursive = false;
      if (params.type === 'Recordings') {
          return apiClient.getLiveTvRecordings(getInitialLiveTvQuery(instance, params, startIndex, limit));
-@@ -452,62 +474,76 @@ class ItemsView {
+@@ -331,6 +353,12 @@ function getItems(instance, params, item, sortBy, startIndex, limit) {
+         ParentId: item.Id,
+         SortBy: sortBy
+     };
++
++    if (item.Type === 'CollectionFolder' && item.CollectionType === CollectionType.Homevideos) {
++        instance.queryRecursive = true;
++        query.IncludeItemTypes = 'Video';
++        query.Recursive = true;
++    }
+
+     if (sortBy === 'Random') {
+         instance.queryRecursive = true;
+@@ -452,62 +480,76 @@ class ItemsView {
          }
 
          let isLoading = false;
@@ -160,7 +173,7 @@ index a4814a3..db12cb5 100644
                  return result;
              }).finally(() => {
                  isLoading = false;
-@@ -795,12 +831,6 @@ class ItemsView {
+@@ -795,12 +837,6 @@ class ItemsView {
              }
          }
 
@@ -173,7 +186,16 @@ index a4814a3..db12cb5 100644
          const self = this;
          self.params = params;
          this.itemsContainer = view.querySelector('.itemsContainer');
-@@ -932,6 +962,7 @@ class ItemsView {
+@@ -877,6 +913,8 @@ class ItemsView {
+
+                     if (refresh) {
+                         focusManager.autoFocus(self.itemsContainer);
++                    } else {
++                        updatePaging(0, loadedItems.length, query.Limit);
+                     }
+                 });
+
+@@ -932,6 +970,7 @@ class ItemsView {
              });
          });
          view.addEventListener('viewhide', function () {
@@ -181,7 +203,7 @@ index a4814a3..db12cb5 100644
              const itemsContainer = self.itemsContainer;
 
              if (itemsContainer) {
-@@ -946,6 +977,7 @@ class ItemsView {
+@@ -946,6 +985,7 @@ class ItemsView {
              }
          });
          view.addEventListener('viewdestroy', function () {
@@ -189,7 +211,7 @@ index a4814a3..db12cb5 100644
              if (self.listController) {
                  self.listController.destroy();
              }
-@@ -1062,6 +1094,13 @@ class ItemsView {
+@@ -1062,6 +1102,13 @@ class ItemsView {
              sortBy.push(option);
          }
 
@@ -203,6 +225,21 @@ index a4814a3..db12cb5 100644
          sortBy.push({
              name: globalize.translate('ReleaseDate'),
              value: [ItemSortBy.ProductionYear, ItemSortBy.PremiereDate, ItemSortBy.SortName].join(',')
+diff --git a/src/components/playback/playbackmanager.js b/src/components/playback/playbackmanager.js
+index 8c69228..ef79543 100644
+--- a/src/components/playback/playbackmanager.js
++++ b/src/components/playback/playbackmanager.js
+@@ -1937,8 +1937,8 @@ export class PlaybackManager {
+                     Filters: 'IsNotFolder',
+                     Recursive: true,
+                     SortBy: options.shuffle ? 'Random' : 'SortName',
+-                    // Only include Photos because we do not handle mixed queues currently
+-                    MediaTypes: 'Photo',
++                    // Zellyfin presents Home Videos libraries as recursive video-only lists.
++                    MediaTypes: 'Video',
+                     Limit: UNLIMITED_ITEMS
+                 }, queryOptions));
+             } else if (firstItem.IsFolder && firstItem.CollectionType === 'musicvideos') {
 diff --git a/src/strings/en-us.json b/src/strings/en-us.json
 index 28fbf0b..077be9d 100644
 --- a/src/strings/en-us.json

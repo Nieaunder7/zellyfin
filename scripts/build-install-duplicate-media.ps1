@@ -26,18 +26,23 @@ Copy-Item -LiteralPath $pluginDll -Destination (Join-Path $installRoot 'Jellyfin
 Write-Host "Installed Duplicate Media plugin: $installRoot"
 
 if ($RestartJellyfin) {
-    $startupShortcut = Join-Path ([Environment]::GetFolderPath('Startup')) 'Zellyfin Server.lnk'
-    if (Test-Path -LiteralPath $startupShortcut) {
-        $shell = New-Object -ComObject Shell.Application
-        try {
-            $shell.ShellExecute($startupShortcut, '', $projectRoot, 'open', 7)
-        } finally {
-            [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell) | Out-Null
-        }
+    $service = Get-Service -Name 'Zellyfin' -ErrorAction SilentlyContinue
+    if ($service) {
+        Write-Host 'The Zellyfin service will restart the server process automatically.'
     } else {
-        Start-Process -FilePath 'powershell.exe' -ArgumentList @(
-            '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
-            '-File', (Join-Path $PSScriptRoot 'start-jellyfin.ps1')) -WindowStyle Hidden
+        $startupShortcut = Join-Path ([Environment]::GetFolderPath('Startup')) 'Zellyfin Server.lnk'
+        if (Test-Path -LiteralPath $startupShortcut) {
+            $shell = New-Object -ComObject Shell.Application
+            try {
+                $shell.ShellExecute($startupShortcut, '', $projectRoot, 'open', 7)
+            } finally {
+                [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell) | Out-Null
+            }
+        } else {
+            Start-Process -FilePath 'powershell.exe' -ArgumentList @(
+                '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
+                '-File', (Join-Path $PSScriptRoot 'start-jellyfin.ps1')) -WindowStyle Hidden
+        }
     }
 
     Write-Host 'Jellyfin restart requested.'
