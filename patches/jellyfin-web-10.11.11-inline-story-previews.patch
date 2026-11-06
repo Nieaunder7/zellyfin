@@ -1,0 +1,282 @@
+diff --git a/src/components/cardbuilder/cardBuilder.js b/src/components/cardbuilder/cardBuilder.js
+--- a/src/components/cardbuilder/cardBuilder.js
++++ b/src/components/cardbuilder/cardBuilder.js
+@@ -10,7 +10,7 @@
+ 
+ import browser from 'scripts/browser';
+ import datetime from 'scripts/datetime';
+-import { createStoryPreviewStrip } from 'scripts/trickplayPreviews';
++import { installInlineStoryPreviews, rememberInlineStoryPreviewItem } from 'scripts/inlineStoryPreviews';
+ import dom from 'utils/dom';
+ import globalize from 'lib/globalize';
+ import { ServerConnections } from 'lib/jellyfin-apiclient';
+@@ -44,98 +44,6 @@
+ } from './cardBuilderUtils';
+ 
+ const enableFocusTransform = !browser.slow && !browser.edge;
+-const storyPreviewItems = new Map();
+-let activeStoryCard;
+-let storyPreviewPanel;
+-let storyPreviewTimer;
+-let storyPreviewHoverInstalled = false;
+-
+-function rememberStoryPreviewItem(item, serverId) {
+-    if (item.MediaType !== 'Video' || !item.RunTimeTicks) return;
+-    const key = `${serverId}:${item.Id}`;
+-    storyPreviewItems.set(key, Promise.resolve(item));
+-    if (storyPreviewItems.size > 150) storyPreviewItems.delete(storyPreviewItems.keys().next().value);
+-}
+-
+-function hideStoryPreview() {
+-    clearTimeout(storyPreviewTimer);
+-    activeStoryCard = null;
+-    storyPreviewPanel?.remove();
+-    storyPreviewPanel = null;
+-}
+-
+-function positionStoryPreview(card, panel) {
+-    const rect = card.getBoundingClientRect();
+-    const margin = 8;
+-    const width = Math.min(520, window.innerWidth - margin * 2);
+-    panel.style.width = `${width}px`;
+-    panel.style.left = `${Math.max(margin, Math.min(window.innerWidth - width - margin, rect.left + rect.width / 2 - width / 2))}px`;
+-    const height = panel.getBoundingClientRect().height;
+-    const below = rect.bottom + margin;
+-    const above = rect.top - height - margin;
+-    panel.style.top = `${below + height <= window.innerHeight - margin ? below : Math.max(margin, above)}px`;
+-}
+-
+-function showStoryPreview(card) {
+-    if (activeStoryCard === card) return;
+-    hideStoryPreview();
+-    activeStoryCard = card;
+-    storyPreviewTimer = setTimeout(async () => {
+-        const serverId = card.dataset.serverid;
+-        const itemId = card.dataset.id;
+-        const apiClient = ServerConnections.getApiClient(serverId);
+-        if (!apiClient || !itemId) return;
+-
+-        const key = `${serverId}:${itemId}`;
+-        let itemPromise = storyPreviewItems.get(key);
+-        if (!itemPromise) {
+-            itemPromise = apiClient.getItem(apiClient.getCurrentUserId(), itemId).catch(() => {
+-                storyPreviewItems.delete(key);
+-                return null;
+-            });
+-            storyPreviewItems.set(key, itemPromise);
+-            if (storyPreviewItems.size > 150) storyPreviewItems.delete(storyPreviewItems.keys().next().value);
+-        }
+-
+-        const item = await itemPromise;
+-        if (activeStoryCard !== card || !card.isConnected || !item) return;
+-        const strip = await createStoryPreviewStrip(item, apiClient, 6);
+-        if (activeStoryCard !== card || !card.isConnected) return;
+-        if (!strip) return;
+-
+-        const panel = document.createElement('div');
+-        panel.className = 'storyPreviewPopover';
+-        panel.setAttribute('role', 'group');
+-        panel.setAttribute('aria-label', globalize.translate('StoryPreview'));
+-        const title = document.createElement('div');
+-        title.className = 'storyPreviewTitle';
+-        title.textContent = globalize.translate('StoryPreview');
+-        panel.append(title, strip);
+-        document.body.appendChild(panel);
+-        storyPreviewPanel = panel;
+-        positionStoryPreview(card, panel);
+-    }, 120);
+-}
+-
+-function installStoryPreviewHover() {
+-    if (storyPreviewHoverInstalled || !layoutManager.desktop) return;
+-    storyPreviewHoverInstalled = true;
+-    const onEnter = event => {
+-        const card = event.target.closest?.('.card[data-mediatype="Video"]');
+-        if (card?.querySelector('.cardOverlayContainer')) showStoryPreview(card);
+-    };
+-    const onLeave = event => {
+-        if (activeStoryCard && activeStoryCard.contains(event.target)
+-            && !activeStoryCard.contains(event.relatedTarget)) hideStoryPreview();
+-    };
+-    document.addEventListener('mouseover', onEnter);
+-    document.addEventListener('mouseout', onLeave);
+-    document.addEventListener('focusin', onEnter);
+-    document.addEventListener('focusout', onLeave);
+-    window.addEventListener('scroll', hideStoryPreview, true);
+-    window.addEventListener('resize', hideStoryPreview);
+-}
+-
+ /**
+  * Generate the HTML markup for cards for a set of items.
+  * @param items - The items used to generate cards.
+@@ -979,7 +887,8 @@
+  * @returns {string} HTML markup for the generated card.
+  */
+ function buildCard(index, item, apiClient, options) {
+-    rememberStoryPreviewItem(item, item.ServerId || options.serverId);
++    rememberInlineStoryPreviewItem(item, item.ServerId || options.serverId);
++    if (item.MediaType === 'Video' && !layoutManager.tv) installInlineStoryPreviews();
+     const action = resolveAction({
+         defaultAction: options.action || 'link',
+         isFolder: item.IsFolder,
+@@ -1231,7 +1140,10 @@
+         additionalCardContent += getHoverMenuHtml(item, action);
+     }
+ 
+-    return '<' + tagName + ' data-index="' + index + '"' + timerAttributes + actionAttribute + ' data-isfolder="' + (item.IsFolder || false) + '" data-serverid="' + (item.ServerId || options.serverId) + '" data-id="' + (item.Id || item.ItemId) + '" data-type="' + item.Type + '"' + mediaTypeData + collectionTypeData + channelIdData + pathData + positionTicksData + collectionIdData + playlistIdData + contextData + parentIdData + startDate + endDate + ' data-prefix="' + escapeHtml(prefix) + '" class="' + className + '"' + ariaLabelAttribute + '>' + cardImageContainerOpen + innerCardFooter + cardImageContainerClose + overlayButtons + additionalCardContent + cardScalableClose + outerCardFooter + cardBoxClose + '</' + tagName + '>';
++    const inlinePreview = item.MediaType === 'Video' && item.RunTimeTicks && !layoutManager.tv ?
++        '<div class="storyPreviewInline" role="group" aria-busy="true" aria-label="' + globalize.translate('StoryPreview') + '"></div>' : '';
++
++    return '<' + tagName + ' data-index="' + index + '"' + timerAttributes + actionAttribute + ' data-isfolder="' + (item.IsFolder || false) + '" data-serverid="' + (item.ServerId || options.serverId) + '" data-id="' + (item.Id || item.ItemId) + '" data-type="' + item.Type + '"' + mediaTypeData + collectionTypeData + channelIdData + pathData + positionTicksData + collectionIdData + playlistIdData + contextData + parentIdData + startDate + endDate + ' data-prefix="' + escapeHtml(prefix) + '" class="' + className + '"' + ariaLabelAttribute + '>' + cardImageContainerOpen + innerCardFooter + cardImageContainerClose + overlayButtons + additionalCardContent + cardScalableClose + outerCardFooter + inlinePreview + cardBoxClose + '</' + tagName + '>';
+ }
+ 
+ /**
+@@ -1241,7 +1153,6 @@
+  * @returns {string} HTML markup of the card overlay.
+  */
+ function getHoverMenuHtml(item, action) {
+-    installStoryPreviewHover();
+     let html = '';
+ 
+     html += '<div class="cardOverlayContainer itemAction" data-action="' + action + '">';
+diff --git a/src/components/cardbuilder/card.scss b/src/components/cardbuilder/card.scss
+--- a/src/components/cardbuilder/card.scss
++++ b/src/components/cardbuilder/card.scss
+@@ -941,3 +941,39 @@
+ .storyPreviewDetail .storyPreviewTitle {
+     font-size: 1.15rem;
+ }
++
++.storyPreviewInline {
++    box-sizing: border-box;
++    width: calc(100% - 0.5rem);
++    max-width: 18rem;
++    aspect-ratio: 6 / 5;
++    margin: 0.25rem auto 0.5rem;
++    padding: 0.2rem;
++    overflow: hidden;
++    border-radius: 0.3rem;
++    background: #202328;
++}
++
++.storyPreviewInline[hidden] {
++    display: none;
++}
++
++.storyPreviewInline .storyPreviewStrip {
++    height: 100%;
++    grid-template-columns: repeat(2, minmax(0, 1fr));
++    grid-template-rows: repeat(3, minmax(0, 1fr));
++    gap: 0.2rem;
++}
++
++.storyPreviewInline .storyPreviewFrame {
++    min-height: 0;
++}
++
++.storyPreviewInline .storyPreviewImage {
++    height: 100%;
++    border-radius: 0.15rem;
++}
++
++.storyPreviewInline .storyPreviewFrame figcaption {
++    display: none;
++}
+diff --git a/src/scripts/inlineStoryPreviews.js b/src/scripts/inlineStoryPreviews.js
+new file mode 100644
+--- /dev/null
++++ b/src/scripts/inlineStoryPreviews.js
+@@ -0,0 +1,93 @@
++import { ServerConnections } from 'lib/jellyfin-apiclient';
++import { createStoryPreviewStrip } from 'scripts/trickplayPreviews';
++
++const items = new Map();
++let observer;
++let mutations;
++
++export function rememberInlineStoryPreviewItem(item, serverId) {
++    if (item.MediaType !== 'Video' || !item.RunTimeTicks) return;
++    const key = `${serverId}:${item.Id}`;
++    items.set(key, Promise.resolve(item));
++    if (items.size > 250) items.delete(items.keys().next().value);
++}
++
++async function loadPreview(container) {
++    if (!container.isConnected || container.dataset.storyPreviewState) return;
++    container.dataset.storyPreviewState = 'loading';
++    const card = container.closest('.card[data-mediatype="Video"]');
++    const serverId = card?.dataset.serverid;
++    const itemId = card?.dataset.id;
++    const client = ServerConnections.getApiClient(serverId);
++    if (!client || !itemId) {
++        container.hidden = true;
++        return;
++    }
++
++    const key = `${serverId}:${itemId}`;
++    let itemPromise = items.get(key);
++    if (!itemPromise) {
++        itemPromise = client.getItem(client.getCurrentUserId(), itemId).catch(() => {
++            items.delete(key);
++            return null;
++        });
++        items.set(key, itemPromise);
++        if (items.size > 250) items.delete(items.keys().next().value);
++    }
++
++    try {
++        const item = await itemPromise;
++        if (!container.isConnected) return;
++        if (!item) {
++            container.hidden = true;
++            container.dataset.storyPreviewState = 'empty';
++            return;
++        }
++        const strip = await createStoryPreviewStrip(item, client, 6);
++        if (!container.isConnected) return;
++        if (strip) {
++            container.appendChild(strip);
++            container.dataset.storyPreviewState = 'ready';
++            container.setAttribute('aria-busy', 'false');
++        } else {
++            container.hidden = true;
++            container.dataset.storyPreviewState = 'empty';
++        }
++    } catch {
++        container.hidden = true;
++        container.dataset.storyPreviewState = 'empty';
++    }
++}
++
++function observeContainer(container) {
++    if (container.dataset.storyPreviewObserved) return;
++    container.dataset.storyPreviewObserved = 'true';
++    if (observer) observer.observe(container);
++    else void loadPreview(container);
++}
++
++function observeAddedCards(node) {
++    if (node.nodeType !== 1) return;
++    if (node.matches?.('.storyPreviewInline')) observeContainer(node);
++    node.querySelectorAll?.('.storyPreviewInline').forEach(observeContainer);
++}
++
++export function installInlineStoryPreviews() {
++    if (mutations || !document.body) return;
++    if (window.IntersectionObserver) {
++        observer = new window.IntersectionObserver(entries => {
++            for (const entry of entries) {
++                if (!entry.isIntersecting) continue;
++                observer.unobserve(entry.target);
++                void loadPreview(entry.target);
++            }
++        }, { rootMargin: '300px 0px' });
++    }
++    mutations = new window.MutationObserver(records => {
++        for (const record of records) {
++            record.addedNodes.forEach(observeAddedCards);
++        }
++    });
++    mutations.observe(document.body, { childList: true, subtree: true });
++    document.querySelectorAll('.storyPreviewInline').forEach(observeContainer);
++}

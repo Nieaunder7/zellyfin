@@ -1,0 +1,171 @@
+diff --git a/src/controllers/list.js b/src/controllers/list.js
+--- a/src/controllers/list.js
++++ b/src/controllers/list.js
+@@ -16,6 +16,13 @@
+ import { stopMultiSelect } from 'components/multiSelect/multiSelect';
+ 
+ const SEEK_COUNT_SORT = 'SeekCount';
++const FILE_SIZE_SORT = 'FileSize';
++
++function usesNameSort(instance) {
++    const keys = instance.getSortValues().sortBy.split(',');
++    return keys[0] === ItemSortBy.SortName
++        || (keys[0] === ItemSortBy.IsFolder && keys[1] === ItemSortBy.SortName);
++}
+ const PLAYBACK_QUERY_PAGE_LIMIT = 500;
+ const HOME_VIDEOS_VIEW_MODE_FOLDERS = 'folders';
+ const HOME_VIDEOS_VIEW_MODE_VIDEOS = 'videos';
+@@ -69,7 +76,7 @@
+     return items;
+ }
+ 
+-function getSeekCountItems(instance, params, item, startIndex, limit) {
++function getSeekCountItems(instance, params, item, startIndex, limit, recursiveHomeVideos) {
+     const apiClient = ServerConnections.getApiClient(params.serverId);
+     const sortValues = instance.getSortValues();
+     const query = modifyQueryWithFilters(instance, {
+@@ -78,8 +85,10 @@
+         Fields: 'PrimaryImageAspectRatio,SortName,Path,ChildCount,MediaSourceCount',
+         ImageTypeLimit: 1,
+         ParentId: item ? item.Id : params.parentId,
+-        IncludeItemTypes: 'Video',
+-        Recursive: true,
++        IncludeItemTypes: recursiveHomeVideos ? 'Video' : (params.type || null),
++        Recursive: recursiveHomeVideos || !item || item.Type === 'BoxSet',
++        IsFavorite: params.IsFavorite === 'true' || null,
++        SortBy: sortValues.sortBy,
+         SortOrder: sortValues.sortOrder
+     });
+ 
+@@ -235,7 +244,7 @@
+     query.Filters = queryFilters.length ? queryFilters.join(',') : null;
+     instance.setFilterStatus(hasFilters);
+ 
+-    if (instance.alphaPicker) {
++    if (instance.alphaPicker && usesNameSort(instance)) {
+         const newValue = instance.alphaPicker.value();
+         if (newValue === '#') {
+             query.NameLessThan = 'A';
+@@ -293,9 +302,7 @@
+         const alphaPicker = instance.alphaPickerElement;
+ 
+         if (alphaPicker) {
+-            const values = instance.getSortValues();
+-
+-            if (values.sortBy.indexOf(ItemSortBy.SortName) !== -1) {
++            if (usesNameSort(instance)) {
+                 alphaPicker.classList.remove('hide');
+                 instance.itemsContainer.parentNode.classList.add('padded-right-withalphapicker');
+             } else {
+@@ -312,12 +319,9 @@
+     const recursiveHomeVideos = isHomeVideosRoot(item)
+         && (forceRecursiveHomeVideos || isRecursiveHomeVideosList(instance, item));
+ 
+-    if (requestedSort === SEEK_COUNT_SORT && recursiveHomeVideos) {
+-        return getSeekCountItems(instance, params, item, startIndex, limit);
+-    }
+-
+-    if (requestedSort === SEEK_COUNT_SORT && isHomeVideosRoot(item)) {
+-        sortBy = `${ItemSortBy.IsFolder},${ItemSortBy.SortName}`;
++    if (requestedSort === SEEK_COUNT_SORT || requestedSort === FILE_SIZE_SORT) {
++        instance.queryRecursive = recursiveHomeVideos || !item || item.Type === 'BoxSet';
++        return getSeekCountItems(instance, params, item, startIndex, limit, recursiveHomeVideos);
+     }
+ 
+     instance.queryRecursive = false;
+@@ -542,6 +546,9 @@
+         let loadedItems = [];
+         let totalRecordCount = 0;
+         let infiniteScrollObserver;
++        let listQueryKey;
++        let requestGeneration = 0;
++        let latestRequest;
+ 
+         function getHomeVideosViewModeKey(item) {
+             return `homevideos-${params.serverId}-${item.Id}-viewMode`;
+@@ -625,16 +632,31 @@
+         }
+ 
+         function fetchData() {
++            const queryKey = JSON.stringify([
++                self.getSortValues(), self.getFilters(), self.homeVideosViewMode,
++                usesNameSort(self) ? self.alphaPicker?.value() : null
++            ]);
++            if (queryKey !== listQueryKey) {
++                listQueryKey = queryKey;
++                query.StartIndex = 0;
++                loadedItems = [];
++                totalRecordCount = 0;
++                disconnectInfiniteScrollObserver();
++            }
++            const generation = ++requestGeneration;
+             isLoading = true;
+ 
+-            return getItems(self, params, self.currentItem, null, query.StartIndex, query.Limit).then(function (result) {
++            latestRequest = getItems(self, params, self.currentItem, null, query.StartIndex, query.Limit).then(function (result) {
++                if (generation !== requestGeneration) {
++                    return latestRequest;
++                }
+                 const newItems = result.Items || result;
+                 const resultStartIndex = result.StartIndex || 0;
+ 
+                 if (resultStartIndex === 0) {
+                     loadedItems = newItems;
+                 } else {
+-                    loadedItems = loadedItems.concat(newItems);
++                    loadedItems = loadedItems.slice(0, resultStartIndex).concat(newItems);
+                 }
+ 
+                 totalRecordCount = result.TotalRecordCount ?? loadedItems.length;
+@@ -650,8 +672,11 @@
+ 
+                 return result;
+             }).finally(() => {
+-                isLoading = false;
++                if (generation === requestGeneration) {
++                    isLoading = false;
++                }
+             });
++            return latestRequest;
+         }
+ 
+         function getItemsHtml(items) {
+@@ -1230,10 +1255,15 @@
+             sortBy.push(option);
+         }
+ 
+-        if (this.params.type !== 'Programs') {
++        if (isHomeVideosRoot(this.currentItem)
++            || ['Folder', 'BoxSet'].includes(this.currentItem?.Type)
++            || ['Video', 'Movie', 'Episode'].includes(this.params.type)) {
+             sortBy.push({
+                 name: globalize.translate('SeekCount'),
+                 value: SEEK_COUNT_SORT
++            }, {
++                name: globalize.translate('FileSize'),
++                value: FILE_SIZE_SORT
+             });
+         }
+ 
+diff --git a/src/strings/en-us.json b/src/strings/en-us.json
+--- a/src/strings/en-us.json
++++ b/src/strings/en-us.json
+@@ -1387,6 +1387,7 @@
+     "PlaybackErrorPlaceHolder": "This is a placeholder for physical media that Jellyfin cannot play. Please insert the disc to play.",
+     "PlaybackRate": "Playback Speed",
+     "PlayCount": "Play count",
++    "FileSize": "File size",
+     "SeekCount": "Seek count",
+     "Played": "Played",
+     "PlayFromBeginning": "Play from beginning",
+diff --git a/src/strings/ko.json b/src/strings/ko.json
+--- a/src/strings/ko.json
++++ b/src/strings/ko.json
+@@ -781,6 +781,7 @@
+     "PlayNext": "다음 재생",
+     "PlayFromBeginning": "처음부터 재생",
+     "PlayCount": "재생 횟수",
++    "FileSize": "파일 크기",
+     "SeekCount": "탐색 횟수",
+     "Overview": "개요",
+     "OptionSubstring": "Substring",

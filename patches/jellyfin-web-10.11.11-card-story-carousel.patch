@@ -1,0 +1,298 @@
+diff --git a/src/components/cardbuilder/cardBuilder.js b/src/components/cardbuilder/cardBuilder.js
+--- a/src/components/cardbuilder/cardBuilder.js
++++ b/src/components/cardbuilder/cardBuilder.js
+@@ -10,7 +10,7 @@
+ 
+ import browser from 'scripts/browser';
+ import datetime from 'scripts/datetime';
+-import { installInlineStoryPreviews, rememberInlineStoryPreviewItem } from 'scripts/inlineStoryPreviews';
++import { installCardStoryCarousel, rememberCardStoryItem } from 'scripts/cardStoryCarousel';
+ import dom from 'utils/dom';
+ import globalize from 'lib/globalize';
+ import { ServerConnections } from 'lib/jellyfin-apiclient';
+@@ -887,8 +887,8 @@
+  * @returns {string} HTML markup for the generated card.
+  */
+ function buildCard(index, item, apiClient, options) {
+-    rememberInlineStoryPreviewItem(item, item.ServerId || options.serverId);
+-    if (item.MediaType === 'Video' && !layoutManager.tv) installInlineStoryPreviews();
++    rememberCardStoryItem(item, item.ServerId || options.serverId);
++    if (item.MediaType === 'Video' && !layoutManager.tv) installCardStoryCarousel();
+     const action = resolveAction({
+         defaultAction: options.action || 'link',
+         isFolder: item.IsFolder,
+@@ -1140,10 +1140,10 @@
+         additionalCardContent += getHoverMenuHtml(item, action);
+     }
+ 
+-    const inlinePreview = item.MediaType === 'Video' && item.RunTimeTicks && !layoutManager.tv ?
+-        '<div class="storyPreviewInline" role="group" aria-busy="true" aria-label="' + globalize.translate('StoryPreview') + '"></div>' : '';
+-
+-    return '<' + tagName + ' data-index="' + index + '"' + timerAttributes + actionAttribute + ' data-isfolder="' + (item.IsFolder || false) + '" data-serverid="' + (item.ServerId || options.serverId) + '" data-id="' + (item.Id || item.ItemId) + '" data-type="' + item.Type + '"' + mediaTypeData + collectionTypeData + channelIdData + pathData + positionTicksData + collectionIdData + playlistIdData + contextData + parentIdData + startDate + endDate + ' data-prefix="' + escapeHtml(prefix) + '" class="' + className + '"' + ariaLabelAttribute + '>' + cardImageContainerOpen + innerCardFooter + cardImageContainerClose + overlayButtons + additionalCardContent + cardScalableClose + outerCardFooter + inlinePreview + cardBoxClose + '</' + tagName + '>';
++    const storyPreviewData = item.MediaType === 'Video' && item.RunTimeTicks && !layoutManager.tv ?
++        ' data-storypreview="true"' : '';
++
++    return '<' + tagName + ' data-index="' + index + '"' + timerAttributes + actionAttribute + ' data-isfolder="' + (item.IsFolder || false) + '" data-serverid="' + (item.ServerId || options.serverId) + '" data-id="' + (item.Id || item.ItemId) + '" data-type="' + item.Type + '"' + mediaTypeData + storyPreviewData + collectionTypeData + channelIdData + pathData + positionTicksData + collectionIdData + playlistIdData + contextData + parentIdData + startDate + endDate + ' data-prefix="' + escapeHtml(prefix) + '" class="' + className + '"' + ariaLabelAttribute + '>' + cardImageContainerOpen + innerCardFooter + cardImageContainerClose + overlayButtons + additionalCardContent + cardScalableClose + outerCardFooter + cardBoxClose + '</' + tagName + '>';
+ }
+ 
+ /**
+diff --git a/src/components/cardbuilder/card.scss b/src/components/cardbuilder/card.scss
+--- a/src/components/cardbuilder/card.scss
++++ b/src/components/cardbuilder/card.scss
+@@ -942,38 +942,57 @@
+     font-size: 1.15rem;
+ }
+ 
+-.storyPreviewInline {
+-    box-sizing: border-box;
+-    width: calc(100% - 0.5rem);
+-    max-width: 18rem;
+-    aspect-ratio: 6 / 5;
+-    margin: 0.25rem auto 0.5rem;
+-    padding: 0.2rem;
++.storyPreviewCarousel {
++    position: absolute;
++    inset: 0;
++    z-index: 0;
++    display: block;
++    width: 100%;
+     overflow: hidden;
+-    border-radius: 0.3rem;
+-    background: #202328;
+-}
+-
+-.storyPreviewInline[hidden] {
+-    display: none;
+-}
+-
+-.storyPreviewInline .storyPreviewStrip {
+-    height: 100%;
+-    grid-template-columns: repeat(2, minmax(0, 1fr));
+-    grid-template-rows: repeat(3, minmax(0, 1fr));
+-    gap: 0.2rem;
+-}
+-
+-.storyPreviewInline .storyPreviewFrame {
+-    min-height: 0;
+-}
+-
+-.storyPreviewInline .storyPreviewImage {
+-    height: 100%;
+-    border-radius: 0.15rem;
+-}
+-
+-.storyPreviewInline .storyPreviewFrame figcaption {
+-    display: none;
+-}
++    border-radius: inherit;
++    background: #111;
++    opacity: 0;
++    pointer-events: none;
++    transition: opacity 0.2s ease;
++}
++
++.storyPreviewPlaying .storyPreviewCarousel {
++    opacity: 1;
++}
++
++.storyPreviewCarousel .storyPreviewFrame {
++    position: absolute;
++    inset: 0;
++    display: flex;
++    align-items: center;
++    justify-content: center;
++    opacity: 0;
++    transition: opacity 0.2s ease;
++}
++
++.storyPreviewCarousel .storyPreviewFrame-active {
++    opacity: 1;
++}
++
++.storyPreviewCarousel .storyPreviewImage {
++    width: 100%;
++    border-radius: 0;
++}
++
++.storyPreviewCarousel .storyPreviewFrame figcaption {
++    position: absolute;
++    top: 0.35rem;
++    left: 0.35rem;
++    margin: 0;
++    padding: 0.2rem 0.35rem;
++    border-radius: 0.2rem;
++    background: rgba(0, 0, 0, 0.7);
++    color: #fff;
++}
++
++@media (prefers-reduced-motion: reduce) {
++    .storyPreviewCarousel,
++    .storyPreviewCarousel .storyPreviewFrame {
++        transition: none;
++    }
++}
+diff --git a/src/scripts/cardStoryCarousel.js b/src/scripts/cardStoryCarousel.js
+new file mode 100644
+--- /dev/null
++++ b/src/scripts/cardStoryCarousel.js
+@@ -0,0 +1,160 @@
++import { ServerConnections } from 'lib/jellyfin-apiclient';
++import { createStoryPreviewStrip } from 'scripts/trickplayPreviews';
++
++const items = new Map();
++const loads = new WeakMap();
++let observer;
++let mutations;
++let activeCard;
++let cycleTimer;
++
++export function rememberCardStoryItem(item, serverId) {
++    if (item.MediaType !== 'Video' || !item.RunTimeTicks) return;
++    const key = `${serverId}:${item.Id}`;
++    items.set(key, Promise.resolve(item));
++    if (items.size > 250) items.delete(items.keys().next().value);
++}
++
++function loadPreview(card) {
++    if (!card.isConnected) return Promise.resolve(null);
++    const existing = loads.get(card);
++    if (existing) return existing;
++
++    const request = (async () => {
++        const imageContainer = card.querySelector('.cardImageContainer');
++        const serverId = card.dataset.serverid;
++        const itemId = card.dataset.id;
++        if (!imageContainer || !serverId || !itemId) return null;
++
++        try {
++            const client = ServerConnections.getApiClient(serverId);
++            if (!client) return null;
++            const key = `${serverId}:${itemId}`;
++            let itemPromise = items.get(key);
++            if (!itemPromise) {
++                itemPromise = client.getItem(client.getCurrentUserId(), itemId).catch(() => {
++                    items.delete(key);
++                    return null;
++                });
++                items.set(key, itemPromise);
++                if (items.size > 250) items.delete(items.keys().next().value);
++            }
++
++            const item = await itemPromise;
++            if (!item || !card.isConnected) return null;
++            const strip = await createStoryPreviewStrip(item, client, 6);
++            if (!strip || !card.isConnected) return null;
++            strip.classList.add('storyPreviewCarousel');
++            strip.setAttribute('aria-hidden', 'true');
++            imageContainer.appendChild(strip);
++            card.dataset.storyPreviewState = 'ready';
++            return strip;
++        } catch {
++            card.dataset.storyPreviewState = 'empty';
++            return null;
++        }
++    })();
++
++    loads.set(card, request);
++    return request;
++}
++
++function stopCarousel() {
++    if (cycleTimer !== undefined) {
++        window.clearTimeout(cycleTimer);
++        cycleTimer = undefined;
++    }
++    activeCard?.classList.remove('storyPreviewPlaying');
++    activeCard = undefined;
++}
++
++function isOnScreen(card) {
++    const bounds = card.getBoundingClientRect();
++    return bounds.bottom > 0 && bounds.top < window.innerHeight
++        && bounds.right > 0 && bounds.left < window.innerWidth;
++}
++
++function startCarousel(card) {
++    if (activeCard === card) return;
++    stopCarousel();
++    activeCard = card;
++    void loadPreview(card).then(strip => {
++        if (activeCard !== card || !card.isConnected || !strip) return;
++        const frames = Array.from(strip.querySelectorAll('.storyPreviewFrame'));
++        if (!frames.length) return;
++
++        let index = 0;
++        frames.forEach((frame, frameIndex) => {
++            frame.classList.toggle('storyPreviewFrame-active', frameIndex === index);
++        });
++        card.classList.add('storyPreviewPlaying');
++        if (frames.length === 1 || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
++
++        const advance = () => {
++            if (activeCard !== card || !card.isConnected || document.hidden || !isOnScreen(card)) {
++                stopCarousel();
++                return;
++            }
++            frames[index].classList.remove('storyPreviewFrame-active');
++            index = (index + 1) % frames.length;
++            frames[index].classList.add('storyPreviewFrame-active');
++            cycleTimer = window.setTimeout(advance, 2200);
++        };
++        cycleTimer = window.setTimeout(advance, 2200);
++    });
++}
++
++function observeCard(card) {
++    if (card.dataset.storyPreviewObserved) return;
++    card.dataset.storyPreviewObserved = 'true';
++    if (observer) observer.observe(card);
++    else void loadPreview(card);
++}
++
++function observeAddedCards(node) {
++    if (node.nodeType !== 1) return;
++    if (node.matches?.('.card[data-storypreview="true"]')) observeCard(node);
++    node.querySelectorAll?.('.card[data-storypreview="true"]').forEach(observeCard);
++}
++
++function cardFor(target) {
++    return target?.closest?.('.card[data-storypreview="true"]');
++}
++
++export function installCardStoryCarousel() {
++    if (mutations || !document.body) return;
++    if (window.IntersectionObserver) {
++        observer = new window.IntersectionObserver(entries => {
++            for (const entry of entries) {
++                if (!entry.isIntersecting) continue;
++                observer.unobserve(entry.target);
++                void loadPreview(entry.target);
++            }
++        }, { rootMargin: '300px 0px' });
++    }
++    mutations = new window.MutationObserver(records => {
++        for (const record of records) record.addedNodes.forEach(observeAddedCards);
++    });
++    mutations.observe(document.body, { childList: true, subtree: true });
++    document.querySelectorAll('.card[data-storypreview="true"]').forEach(observeCard);
++
++    document.addEventListener('mouseover', event => {
++        const card = cardFor(event.target);
++        if (card) startCarousel(card);
++    });
++    document.addEventListener('mouseout', event => {
++        const card = cardFor(event.target);
++        if (card === activeCard && !card.contains(event.relatedTarget)) stopCarousel();
++    });
++    document.addEventListener('focusin', event => {
++        const card = cardFor(event.target);
++        if (card) startCarousel(card);
++    });
++    document.addEventListener('focusout', event => {
++        const card = cardFor(event.target);
++        if (card === activeCard && !card.contains(event.relatedTarget)) stopCarousel();
++    });
++    document.addEventListener('visibilitychange', () => {
++        if (document.hidden) stopCarousel();
++    });
++}

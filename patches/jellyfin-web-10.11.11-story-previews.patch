@@ -1,0 +1,356 @@
+diff --git a/src/components/cardbuilder/card.scss b/src/components/cardbuilder/card.scss
+--- a/src/components/cardbuilder/card.scss
++++ b/src/components/cardbuilder/card.scss
+@@ -878,3 +878,56 @@
+     transform: scale(1.4, 1.4);
+     transition: 0.2s;
+ }
++
++.storyPreviewPopover {
++    position: fixed;
++    z-index: 10000;
++    box-sizing: border-box;
++    padding: 0.65rem;
++    border: 1px solid rgba(255, 255, 255, 0.2);
++    border-radius: 0.65rem;
++    background: rgba(20, 22, 26, 0.97);
++    box-shadow: 0 0.8rem 2rem rgba(0, 0, 0, 0.45);
++    pointer-events: none;
++}
++
++.storyPreviewTitle {
++    margin: 0 0 0.45rem;
++    font-weight: 650;
++    font-size: 0.9rem;
++}
++
++.storyPreviewStrip {
++    display: grid;
++    grid-template-columns: repeat(3, minmax(0, 1fr));
++    gap: 0.5rem;
++    width: 100%;
++}
++
++.storyPreviewFrame {
++    min-width: 0;
++    margin: 0;
++}
++
++.storyPreviewImage {
++    width: 100%;
++    border-radius: 0.3rem;
++    background-color: #30343a;
++    background-repeat: no-repeat;
++}
++
++.storyPreviewFrame figcaption {
++    margin-top: 0.25rem;
++    font-size: 0.75rem;
++    color: #d3d6da;
++    text-align: center;
++}
++
++.storyPreviewDetail {
++    max-width: 52rem;
++    margin: 1.3rem 0 1.8rem;
++}
++
++.storyPreviewDetail .storyPreviewTitle {
++    font-size: 1.15rem;
++}
+diff --git a/src/components/cardbuilder/cardBuilder.js b/src/components/cardbuilder/cardBuilder.js
+--- a/src/components/cardbuilder/cardBuilder.js
++++ b/src/components/cardbuilder/cardBuilder.js
+@@ -10,6 +10,7 @@
+ 
+ import browser from 'scripts/browser';
+ import datetime from 'scripts/datetime';
++import { createTrickplayPreviewStrip } from 'scripts/trickplayPreviews';
+ import dom from 'utils/dom';
+ import globalize from 'lib/globalize';
+ import { ServerConnections } from 'lib/jellyfin-apiclient';
+@@ -43,6 +44,96 @@
+ } from './cardBuilderUtils';
+ 
+ const enableFocusTransform = !browser.slow && !browser.edge;
++const storyPreviewItems = new Map();
++let activeStoryCard;
++let storyPreviewPanel;
++let storyPreviewTimer;
++let storyPreviewHoverInstalled = false;
++
++function rememberStoryPreviewItem(item, serverId) {
++    if (item.MediaType !== 'Video' || !item.RunTimeTicks) return;
++    const key = `${serverId}:${item.Id}`;
++    storyPreviewItems.set(key, Promise.resolve(item));
++    if (storyPreviewItems.size > 150) storyPreviewItems.delete(storyPreviewItems.keys().next().value);
++}
++
++function hideStoryPreview() {
++    clearTimeout(storyPreviewTimer);
++    activeStoryCard = null;
++    storyPreviewPanel?.remove();
++    storyPreviewPanel = null;
++}
++
++function positionStoryPreview(card, panel) {
++    const rect = card.getBoundingClientRect();
++    const margin = 8;
++    const width = Math.min(520, window.innerWidth - margin * 2);
++    panel.style.width = `${width}px`;
++    panel.style.left = `${Math.max(margin, Math.min(window.innerWidth - width - margin, rect.left + rect.width / 2 - width / 2))}px`;
++    const height = panel.getBoundingClientRect().height;
++    const below = rect.bottom + margin;
++    const above = rect.top - height - margin;
++    panel.style.top = `${below + height <= window.innerHeight - margin ? below : Math.max(margin, above)}px`;
++}
++
++function showStoryPreview(card) {
++    if (activeStoryCard === card) return;
++    hideStoryPreview();
++    activeStoryCard = card;
++    storyPreviewTimer = setTimeout(async () => {
++        const serverId = card.dataset.serverid;
++        const itemId = card.dataset.id;
++        const apiClient = ServerConnections.getApiClient(serverId);
++        if (!apiClient || !itemId) return;
++
++        const key = `${serverId}:${itemId}`;
++        let itemPromise = storyPreviewItems.get(key);
++        if (!itemPromise) {
++            itemPromise = apiClient.getItem(apiClient.getCurrentUserId(), itemId).catch(() => {
++                storyPreviewItems.delete(key);
++                return null;
++            });
++            storyPreviewItems.set(key, itemPromise);
++            if (storyPreviewItems.size > 150) storyPreviewItems.delete(storyPreviewItems.keys().next().value);
++        }
++
++        const item = await itemPromise;
++        if (activeStoryCard !== card || !card.isConnected || !item) return;
++        const strip = createTrickplayPreviewStrip(item, apiClient);
++        if (!strip) return;
++
++        const panel = document.createElement('div');
++        panel.className = 'storyPreviewPopover';
++        panel.setAttribute('role', 'group');
++        panel.setAttribute('aria-label', globalize.translate('StoryPreview'));
++        const title = document.createElement('div');
++        title.className = 'storyPreviewTitle';
++        title.textContent = globalize.translate('StoryPreview');
++        panel.append(title, strip);
++        document.body.appendChild(panel);
++        storyPreviewPanel = panel;
++        positionStoryPreview(card, panel);
++    }, 120);
++}
++
++function installStoryPreviewHover() {
++    if (storyPreviewHoverInstalled || !layoutManager.desktop) return;
++    storyPreviewHoverInstalled = true;
++    const onEnter = event => {
++        const card = event.target.closest?.('.card[data-mediatype="Video"]');
++        if (card?.querySelector('.cardOverlayContainer')) showStoryPreview(card);
++    };
++    const onLeave = event => {
++        if (activeStoryCard && activeStoryCard.contains(event.target)
++            && !activeStoryCard.contains(event.relatedTarget)) hideStoryPreview();
++    };
++    document.addEventListener('mouseover', onEnter);
++    document.addEventListener('mouseout', onLeave);
++    document.addEventListener('focusin', onEnter);
++    document.addEventListener('focusout', onLeave);
++    window.addEventListener('scroll', hideStoryPreview, true);
++    window.addEventListener('resize', hideStoryPreview);
++}
+ 
+ /**
+  * Generate the HTML markup for cards for a set of items.
+@@ -887,6 +978,7 @@
+  * @returns {string} HTML markup for the generated card.
+  */
+ function buildCard(index, item, apiClient, options) {
++    rememberStoryPreviewItem(item, item.ServerId || options.serverId);
+     const action = resolveAction({
+         defaultAction: options.action || 'link',
+         isFolder: item.IsFolder,
+@@ -1148,6 +1240,7 @@
+  * @returns {string} HTML markup of the card overlay.
+  */
+ function getHoverMenuHtml(item, action) {
++    installStoryPreviewHover();
+     let html = '';
+ 
+     html += '<div class="cardOverlayContainer itemAction" data-action="' + action + '">';
+diff --git a/src/controllers/itemDetails/index.html b/src/controllers/itemDetails/index.html
+--- a/src/controllers/itemDetails/index.html
++++ b/src/controllers/itemDetails/index.html
+@@ -122,6 +122,10 @@
+                         <div class="overview-controls">
+                             <a class="overview-expand hide" is="emby-linkbutton" href="#">${ShowMore}</a>
+                         </div>
++                        <section class="storyPreviewDetail hide">
++                            <h2 class="storyPreviewTitle">${StoryPreview}</h2>
++                            <div class="storyPreviewContent"></div>
++                        </section>
+                         <p id="itemBirthday"></p>
+                         <p id="itemBirthLocation"></p>
+                         <p id="itemDeathDate"></p>
+diff --git a/src/controllers/itemDetails/index.js b/src/controllers/itemDetails/index.js
+--- a/src/controllers/itemDetails/index.js
++++ b/src/controllers/itemDetails/index.js
+@@ -28,6 +28,7 @@
+ import { ServerConnections } from 'lib/jellyfin-apiclient';
+ import browser from 'scripts/browser';
+ import datetime from 'scripts/datetime';
++import { createTrickplayPreviewStrip } from 'scripts/trickplayPreviews';
+ import dom from 'utils/dom';
+ import { download } from 'scripts/fileDownloader';
+ import libraryMenu from 'scripts/libraryMenu';
+@@ -966,6 +967,15 @@
+     }
+ }
+ 
++function renderStoryPreview(page, item, apiClient) {
++    const section = page.querySelector('.storyPreviewDetail');
++    const content = section.querySelector('.storyPreviewContent');
++    const strip = createTrickplayPreviewStrip(item, apiClient);
++    content.replaceChildren();
++    section.classList.toggle('hide', !strip);
++    if (strip) content.appendChild(strip);
++}
++
+ function renderGenres(page, item, context = inferContext(item)) {
+     const genres = item.GenreItems || [];
+     const type = context === 'music' ? 'MusicGenre' : 'Genre';
+@@ -1132,6 +1142,7 @@
+     renderChannelGuide(page, apiClient, item);
+     renderTagline(page, item);
+     renderOverview(page, item);
++    renderStoryPreview(page, item, apiClient);
+     renderMiscInfo(page, item);
+     reloadUserDataButtons(page, item);
+     renderLyricsContainer(page, item, apiClient);
+diff --git a/src/scripts/trickplayPreviews.js b/src/scripts/trickplayPreviews.js
+new file mode 100644
+index 0000000..d89459d
+--- /dev/null
++++ b/src/scripts/trickplayPreviews.js
+@@ -0,0 +1,95 @@
++const PREVIEW_POINTS = [0.25, 0.5, 0.75];
++
++function formatTime(milliseconds) {
++    const seconds = Math.floor(milliseconds / 1000);
++    const hours = Math.floor(seconds / 3600);
++    const minutes = Math.floor(seconds / 60) % 60;
++    const remainder = seconds % 60;
++    const padded = value => String(value).padStart(2, '0');
++    return hours ? `${hours}:${padded(minutes)}:${padded(remainder)}` : `${minutes}:${padded(remainder)}`;
++}
++
++export function getTrickplayFrames(item, apiClient) {
++    if (item?.MediaType !== 'Video' || !apiClient) return [];
++
++    const fallbackFrames = () => {
++        const durationTicks = item.RunTimeTicks || item.MediaSources?.[0]?.RunTimeTicks;
++        if (!Number.isFinite(durationTicks) || durationTicks <= 0) return [];
++        return PREVIEW_POINTS.map(point => ({
++            percent: Math.round(point * 100),
++            time: formatTime(durationTicks / 10000 * point),
++            url: apiClient.getUrl(`StoryPreview/Items/${item.Id}/${Math.round(point * 100)}.jpg`, {
++                ApiKey: apiClient.accessToken()
++            }),
++            aspectRatio: '16 / 9',
++            backgroundSize: 'cover',
++            backgroundPosition: 'center'
++        }));
++    };
++
++    if (!item.Trickplay || !Object.keys(item.Trickplay).length) return fallbackFrames();
++
++    const mediaSourceId = item.MediaSources?.find(source => item.Trickplay[source.Id])?.Id
++        || Object.keys(item.Trickplay)[0];
++    const resolutions = item.Trickplay[mediaSourceId];
++    const durationTicks = item.RunTimeTicks
++        || item.MediaSources?.find(source => source.Id === mediaSourceId)?.RunTimeTicks;
++    if (!resolutions || !Number.isFinite(durationTicks) || durationTicks <= 0) return fallbackFrames();
++
++    const available = Object.values(resolutions).filter(info =>
++        info.Width > 0 && info.Height > 0 && info.TileWidth > 0 && info.TileHeight > 0
++        && info.Interval > 0 && info.ThumbnailCount > 0);
++    if (!available.length) return fallbackFrames();
++
++    const info = available.slice(1).reduce((closest, current) =>
++        Math.abs(current.Width - 320) < Math.abs(closest.Width - 320) ? current : closest, available[0]);
++    const tileSize = info.TileWidth * info.TileHeight;
++    const durationMs = durationTicks / 10000;
++
++    return PREVIEW_POINTS.map(point => {
++        const frameIndex = Math.min(info.ThumbnailCount - 1,
++            Math.max(0, Math.round(durationMs * point / info.Interval)));
++        const spriteIndex = Math.floor(frameIndex / tileSize);
++        const tileOffset = frameIndex % tileSize;
++        const tileX = tileOffset % info.TileWidth;
++        const tileY = Math.floor(tileOffset / info.TileWidth);
++        const url = apiClient.getUrl(`Videos/${item.Id}/Trickplay/${info.Width}/${spriteIndex}.jpg`, {
++            ApiKey: apiClient.accessToken(),
++            MediaSourceId: mediaSourceId
++        });
++
++        return {
++            percent: Math.round(point * 100),
++            time: formatTime(frameIndex * info.Interval),
++            url,
++            aspectRatio: `${info.Width} / ${info.Height}`,
++            backgroundSize: `${info.TileWidth * 100}% ${info.TileHeight * 100}%`,
++            backgroundPosition: `${info.TileWidth === 1 ? 0 : tileX * 100 / (info.TileWidth - 1)}% ${info.TileHeight === 1 ? 0 : tileY * 100 / (info.TileHeight - 1)}%`
++        };
++    });
++}
++
++export function createTrickplayPreviewStrip(item, apiClient) {
++    const frames = getTrickplayFrames(item, apiClient);
++    if (!frames.length) return null;
++
++    const strip = document.createElement('div');
++    strip.className = 'storyPreviewStrip';
++    for (const frame of frames) {
++        const figure = document.createElement('figure');
++        figure.className = 'storyPreviewFrame';
++        const image = document.createElement('div');
++        image.className = 'storyPreviewImage';
++        image.setAttribute('role', 'img');
++        image.setAttribute('aria-label', `${frame.percent}% · ${frame.time}`);
++        image.style.aspectRatio = frame.aspectRatio;
++        image.style.backgroundImage = `url(${JSON.stringify(frame.url)})`;
++        image.style.backgroundSize = frame.backgroundSize;
++        image.style.backgroundPosition = frame.backgroundPosition;
++        const caption = document.createElement('figcaption');
++        caption.textContent = `${frame.percent}% · ${frame.time}`;
++        figure.append(image, caption);
++        strip.appendChild(figure);
++    }
++    return strip;
++}
+diff --git a/src/strings/en-us.json b/src/strings/en-us.json
+--- a/src/strings/en-us.json
++++ b/src/strings/en-us.json
+@@ -1429,6 +1429,7 @@
+     "Premiere": "Premiere",
+     "Premieres": "Premieres",
+     "Preview": "Preview",
++    "StoryPreview": "Scene preview",
+     "PreviewLyrics": "Preview Lyrics",
+     "Previous": "Previous",
+     "PreviousChapter": "Previous chapter",
+diff --git a/src/strings/ko.json b/src/strings/ko.json
+--- a/src/strings/ko.json
++++ b/src/strings/ko.json
+@@ -1327,6 +1327,7 @@
+     "LabelMaxMuxingQueueSizeHelp": "모든 스트림이 초기화되기를 기다리는 동안 버퍼링할 수 있는 최대 패킷 수입니다. ffmpeg 로그에서 \"출력 스트림을 위해 버퍼링된 패킷이 너무 많습니다\" 오류가 계속 발생하면 값을 늘리십시오. 권장 값은 2048입니다.",
+     "LabelMaxMuxingQueueSize": "최대 muxing 대기열 크기",
+     "Preview": "미리보기",
++    "StoryPreview": "장면 미리보기",
+     "SubtitleVerticalPositionHelp": "텍스트가 나타나는 줄 번호입니다. 양수는 하향식을 나타냅니다. 음수는 상향식을 나타냅니다.",
+     "LabelSubtitleVerticalPosition": "세로 위치",
+     "ClearQueue": "대기열 지우기",

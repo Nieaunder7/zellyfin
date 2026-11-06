@@ -1,0 +1,291 @@
+diff --git a/src/apps/stable/routes/search.tsx b/src/apps/stable/routes/search.tsx
+--- a/src/apps/stable/routes/search.tsx
++++ b/src/apps/stable/routes/search.tsx
+@@ -3,7 +3,7 @@
+ import { useSearchParams } from 'react-router-dom';
+ import { useDebounceValue } from 'usehooks-ts';
+ 
+-import SearchFields from 'apps/stable/features/search/components/SearchFields';
++import SearchFields, { getSearchMode } from 'apps/stable/features/search/components/SearchFields';
+ import SearchResults from 'apps/stable/features/search/components/SearchResults';
+ import SearchSuggestions from 'apps/stable/features/search/components/SearchSuggestions';
+ import Page from 'components/Page';
+@@ -13,12 +13,15 @@
+ const COLLECTION_TYPE_PARAM = 'collectionType';
+ const PARENT_ID_PARAM = 'parentId';
+ const QUERY_PARAM = 'query';
++const MODE_PARAM = 'mode';
+ 
+ const Search: FC = () => {
+     const [searchParams] = useSearchParams();
+     const parentIdQuery = searchParams.get(PARENT_ID_PARAM) || undefined;
+     const collectionTypeQuery = (searchParams.get(COLLECTION_TYPE_PARAM) || undefined) as CollectionType | undefined;
+     const [ query, setQuery ] = useSearchParam(QUERY_PARAM);
++    const [modeParam, setMode] = useSearchParam(MODE_PARAM, 'all');
++    const mode = getSearchMode(modeParam);
+     const [debouncedQuery] = useDebounceValue(query, 500);
+ 
+     return (
+@@ -27,7 +30,7 @@
+             title={globalize.translate('Search')}
+             className='mainAnimatedPage libraryPage allLibraryPage noSecondaryNavPage'
+         >
+-            <SearchFields query={query} onSearch={setQuery} />
++            <SearchFields query={query} mode={mode} onSearch={setQuery} onModeChange={setMode} />
+             {!debouncedQuery ? (
+                 <SearchSuggestions
+                     parentId={parentIdQuery}
+@@ -37,6 +40,7 @@
+                     parentId={parentIdQuery}
+                     collectionType={collectionTypeQuery}
+                     query={debouncedQuery}
++                    mode={mode}
+                 />
+             )}
+         </Page>
+diff --git a/src/apps/stable/features/search/components/SearchFields.tsx b/src/apps/stable/features/search/components/SearchFields.tsx
+--- a/src/apps/stable/features/search/components/SearchFields.tsx
++++ b/src/apps/stable/features/search/components/SearchFields.tsx
+@@ -7,13 +7,24 @@
+ import 'styles/flexstyles.scss';
+ import './searchfields.scss';
+ 
++export type SearchMode = 'all' | 'metadata' | 'performer' | 'filename';
++
++export function getSearchMode(value: string): SearchMode {
++    if (value === 'metadata' || value === 'performer' || value === 'filename') return value;
++    return 'all';
++}
++
+ interface SearchFieldsProps {
+     query: string,
+-    onSearch?: (query: string) => void
++    mode: SearchMode,
++    onSearch?: (query: string) => void,
++    onModeChange: (mode: SearchMode) => void
+ }
+ 
+ const SearchFields: FC<SearchFieldsProps> = ({
+     onSearch = () => { /* no-op */ },
++    onModeChange,
++    mode,
+     query
+ }) => {
+     const inputRef = useRef<HTMLInputElement>(null);
+@@ -32,6 +43,10 @@
+     const onChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
+         onSearch(e.target.value);
+     }, [ onSearch ]);
++
++    const onSearchModeChange = useCallback((e: ChangeEvent<HTMLSelectElement>) => {
++        onModeChange(getSearchMode(e.target.value));
++    }, [onModeChange]);
+ 
+     return (
+         <div className='padded-left padded-right searchFields'>
+@@ -57,6 +72,17 @@
+                     />
+                 </div>
+             </div>
++            <div className='searchModeControls'>
++                <label htmlFor='searchModeSelect'>검색 대상</label>
++                <select id='searchModeSelect' className='emby-select' aria-label='검색 대상'
++                    value={mode} onChange={onSearchModeChange}>
++                    <option value='all'>전체</option>
++                    <option value='metadata'>메타 정보 (시놉시스·장면)</option>
++                    <option value='performer'>배우 이름</option>
++                    <option value='filename'>파일 이름</option>
++                </select>
++                {mode === 'performer' && <span>현재 색인된 배우: 아이자와 루루</span>}
++            </div>
+             {layoutManager.tv && !browser.tv
+                 && <AlphaPicker onAlphaPicked={onAlphaPicked} />
+             }
+diff --git a/src/apps/stable/features/search/components/SearchResults.tsx b/src/apps/stable/features/search/components/SearchResults.tsx
+--- a/src/apps/stable/features/search/components/SearchResults.tsx
++++ b/src/apps/stable/features/search/components/SearchResults.tsx
+@@ -8,6 +8,7 @@
+ import { appRouter } from 'components/router/appRouter';
+ import { playbackManager } from 'components/playback/playbackmanager';
+ import SearchResultsRow from './SearchResultsRow';
++import type { SearchMode } from './SearchFields';
+ import { CardShape } from 'utils/card';
+ import { CollectionType } from '@jellyfin/sdk/lib/generated-client/models/collection-type';
+ import { Section } from '../types';
+@@ -29,6 +30,7 @@
+     itemName: string;
+     durationTicks: number;
+     matchedInName: boolean;
++    matchedInMetadata: boolean;
+     matchedPerformerCode?: string | null;
+     performerSource?: string | null;
+     scenes: UnifiedScene[];
+@@ -48,6 +50,7 @@
+     parentId?: string;
+     collectionType?: CollectionType;
+     query?: string;
++    mode: SearchMode;
+ }
+ 
+ function gridShape(shape?: CardShape) {
+@@ -74,10 +77,13 @@
+ 
+ const UnifiedVideoCard: FC<{ item: UnifiedVideo, apiClient?: ApiClient, serverId?: string }> = ({ item, apiClient, serverId }) => {
+     const showDetails = useCallback(() => appRouter.showItem(item.itemId, serverId), [item.itemId, serverId]);
+-    let matchLabel = item.matchedInName ? '파일명 일치' : '장면 일치';
++    const matchLabels: string[] = [];
+     if (item.matchedPerformerCode) {
+-        matchLabel = `${item.performerSource || '출연작 목록'} 품번 ${item.matchedPerformerCode} 일치`;
++        matchLabels.push(`${item.performerSource || '출연작 목록'} 품번 ${item.matchedPerformerCode} 일치`);
+     }
++    if (item.matchedInName) matchLabels.push('파일명 일치');
++    if (item.matchedInMetadata) matchLabels.push('시놉시스 일치');
++    if (item.scenes.length > 0) matchLabels.push('장면 일치');
+     return <article className='sceneAnalysisCard'>
+         {item.scenes[0] && <img className='sceneAnalysisImage' loading='lazy'
+             src={apiClient?.getUrl(item.scenes[0].imageUrl, { ApiKey: apiClient.accessToken() })}
+@@ -85,32 +91,41 @@
+         <div className='sceneAnalysisBody'>
+             <h3><button type='button' className='button-flat unifiedSearchTitle' onClick={showDetails}>{item.itemName}</button></h3>
+             <p className='unifiedSearchMatch'>
+-                {matchLabel}
+-                {item.matchedPerformerCode && item.matchedInName ? ' · 파일명도 일치' : ''}
+-                {(item.matchedPerformerCode || item.matchedInName) && item.scenes.length > 0 ? ' · 장면도 일치' : ''}
++                {matchLabels.join(' · ')}
+             </p>
+             {item.scenes.map(scene => <UnifiedSceneRow key={scene.timeTicks} item={item} scene={scene} apiClient={apiClient} />)}
+         </div>
+     </article>;
+ };
+ 
+-const PagedSearchResults: FC<SearchResultsProps> = ({ parentId, collectionType, query }) => {
++const RESULT_TITLES: Record<SearchMode, string> = {
++    all: '영상 및 장면', metadata: '메타 정보', performer: '배우 출연작', filename: '파일 이름'
++};
++
++function hasNoSearchResults(mode: SearchMode, standardCount: number, unifiedCount: number,
++    hasMore: boolean, standardError: boolean, unifiedPending: boolean, unifiedAvailable: boolean) {
++    if (mode !== 'all') return unifiedAvailable && unifiedCount === 0;
++    return standardCount === 0 && unifiedCount === 0 && !hasMore && !standardError && !unifiedPending;
++}
++
++const PagedSearchResults: FC<SearchResultsProps> = ({ parentId, collectionType, query, mode }) => {
+     const { __legacyApiClient__: apiClient, user } = useApi();
+     const [pageSize, setCurrentPageSize] = useState(getPageSize);
+     const [startIndex, setStartIndex] = useState(0);
+     const [sections, setSections] = useState<Section[]>([]);
+     const [hasMore, setHasMore] = useState(true);
+-    const { data, isPending, isFetching, isError, refetch } = useSearchItems(parentId, collectionType, query?.trim(), startIndex, pageSize);
++    const { data, isPending, isFetching, isError, refetch } = useSearchItems(parentId, collectionType,
++        mode === 'all' ? query?.trim() : undefined, startIndex, pageSize);
+     const sentinel = useRef<HTMLButtonElement>(null);
+     const unifiedSentinel = useRef<HTMLButtonElement>(null);
+     const lastPage = useRef(-1);
+     const currentSections = useRef<Section[]>([]);
+     const loadingNext = useRef(false);
+     const unified = useInfiniteQuery({
+-        queryKey: ['UnifiedVideoSearch', user?.ServerId, parentId, query?.trim(), pageSize],
++        queryKey: ['UnifiedVideoSearch', user?.ServerId, parentId, mode, query?.trim(), pageSize],
+         initialPageParam: 0,
+         queryFn: async ({ pageParam }) => await apiClient!.getJSON(apiClient!.getUrl('SceneAnalysis/UnifiedSearch', {
+-            query: query?.trim(), parentId, startIndex: pageParam, limit: pageSize
++            query: query?.trim(), parentId, mode, startIndex: pageParam, limit: pageSize
+         })) as UnifiedPage,
+         getNextPageParam: (page, pages) => {
+             const fetched = pages.reduce((count, entry) => count + entry.items.length, 0);
+@@ -120,10 +135,13 @@
+     });
+     const unifiedItems = unified.data?.pages.flatMap(page => page.items) || [];
+     const unifiedAvailable = !!unified.data && !unified.isError;
+-    const visibleSections = unifiedAvailable ? sections.map(section => ({
+-        ...section,
+-        items: section.items.filter(item => item.MediaType !== 'Video')
+-    })).filter(section => section.items.length > 0) : sections;
++    let visibleSections: Section[] = [];
++    if (mode === 'all') {
++        visibleSections = unifiedAvailable ? sections.map(section => ({
++            ...section,
++            items: section.items.filter(item => item.MediaType !== 'Video')
++        })).filter(section => section.items.length > 0) : sections;
++    }
+ 
+     useEffect(() => {
+         const onPageSizeChange = () => {
+@@ -191,11 +209,13 @@
+         setPageSize(Number(event.target.value));
+     }, []);
+ 
+-    if (isPending && !sections.length && unified.isPending) return <Loading />;
+-    if (!visibleSections.length && !unifiedItems.length && !hasMore && !isError && !unified.isPending) {
++    if (mode === 'all' && isPending && !sections.length && unified.isPending) return <Loading />;
++    const noResults = hasNoSearchResults(mode, visibleSections.length, unifiedItems.length,
++        hasMore, isError, unified.isPending, unifiedAvailable);
++    if (noResults) {
+         return <div className='noItemsMessage centerMessage'>
+             {globalize.translate('SearchResultsEmpty', query)}
+-            {collectionType && <div><Link className='emby-button' to={`/search?query=${encodeURIComponent(query || '')}`}>
++            {mode === 'all' && collectionType && <div><Link className='emby-button' to={`/search?query=${encodeURIComponent(query || '')}`}>
+                 {globalize.translate('RetryWithGlobalSearch')}
+             </Link></div>}
+         </div>;
+@@ -208,7 +228,7 @@
+             </select>
+         </label>
+         {unifiedAvailable && unifiedItems.length > 0 && <section className='unifiedSearchSection padded-left padded-right'>
+-            <h2 className='sectionTitle'>영상 및 장면 <span className='unifiedSearchCount'>({unified.data?.pages[0].totalRecordCount})</span></h2>
++            <h2 className='sectionTitle'>{RESULT_TITLES[mode]} <span className='unifiedSearchCount'>({unified.data?.pages[0].totalRecordCount})</span></h2>
+             {unified.data?.pages[0].performerSummary && <p className='unifiedSearchMatch'>
+                 저장된 {unified.data.pages[0].performerSummary.name} 출연작 품번
+                 {' '}{unified.data.pages[0].performerSummary.catalogCodeCount}개 중
+@@ -224,7 +244,7 @@
+             </button>}
+         </section>}
+         {unified.isPending && <p className='padded-left'>영상과 장면을 검색하는 중…</p>}
+-        {unified.isError && <p className='padded-left'>장면 검색을 불러오지 못했습니다. 파일 검색 결과를 표시합니다.</p>}
++        {unified.isError && <p className='padded-left'>선택한 검색 결과를 불러오지 못했습니다.</p>}
+         {visibleSections.map(section => <SearchResultsRow
+             key={section.title}
+             title={globalize.translate(section.title)}
+@@ -236,7 +256,7 @@
+                 allowBottomPadding: true
+             }}
+         />)}
+-        {(hasMore || isError) && (!unifiedAvailable || visibleSections.length > 0) && <button
++        {mode === 'all' && (hasMore || isError) && (!unifiedAvailable || visibleSections.length > 0) && <button
+             ref={sentinel}
+             type='button'
+             className='emby-button raised'
+@@ -248,7 +268,7 @@
+ 
+ // Remount all page state when the search scope changes; old requests are cancelled.
+ const SearchResults: FC<SearchResultsProps> = props => <PagedSearchResults
+-    key={JSON.stringify([props.parentId, props.collectionType, props.query?.trim(), getPageSize()])}
++    key={JSON.stringify([props.parentId, props.collectionType, props.mode, props.query?.trim(), getPageSize()])}
+     {...props}
+ />;
+ export default SearchResults;
+diff --git a/src/apps/stable/features/search/components/searchfields.scss b/src/apps/stable/features/search/components/searchfields.scss
+--- a/src/apps/stable/features/search/components/searchfields.scss
++++ b/src/apps/stable/features/search/components/searchfields.scss
+@@ -9,3 +9,21 @@
+     font-size: 2em;
+     align-self: flex-end;
+ }
++
++.searchModeControls {
++    display: flex;
++    align-items: center;
++    flex-wrap: wrap;
++    gap: 0.6em;
++    max-width: 60em;
++    margin: 0.75em auto 0;
++
++    .emby-select {
++        width: auto;
++        min-width: 12em;
++    }
++
++    span {
++        opacity: 0.75;
++    }
++}

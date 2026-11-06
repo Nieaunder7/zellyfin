@@ -1,0 +1,685 @@
+diff --git a/src/apps/stable/features/search/api/useArtistsSearch.ts b/src/apps/stable/features/search/api/useArtistsSearch.ts
+--- a/src/apps/stable/features/search/api/useArtistsSearch.ts
++++ b/src/apps/stable/features/search/api/useArtistsSearch.ts
+@@ -8,7 +8,7 @@
+ import { QUERY_OPTIONS } from '../constants/queryOptions';
+ import { isMusic } from '../utils/search';
+ 
+-const fetchArtists = async (
++export const fetchArtists = async (
+     api: Api,
+     userId: string,
+     params?: ArtistsApiGetArtistsRequest,
+diff --git a/src/apps/stable/features/search/api/useLiveTvSearch.ts b/src/apps/stable/features/search/api/useLiveTvSearch.ts
+--- a/src/apps/stable/features/search/api/useLiveTvSearch.ts
++++ b/src/apps/stable/features/search/api/useLiveTvSearch.ts
+@@ -9,7 +9,7 @@
+ import { Section } from '../types';
+ import { fetchItemsByType } from './fetchItemsByType';
+ 
+-const fetchLiveTv = (api: Api, userId: string | undefined, searchTerm: string | undefined, signal: AbortSignal) => {
++export const fetchLiveTv = (api: Api, userId: string | undefined, searchTerm: string | undefined, signal: AbortSignal, startIndex = 0, parentId?: string) => {
+     const sections: Section[] = [];
+ 
+     // Movies row
+@@ -19,7 +19,9 @@
+         {
+             includeItemTypes: [ BaseItemKind.LiveTvProgram ],
+             isMovie: true,
+-            searchTerm
++            searchTerm,
++            startIndex,
++            parentId
+         },
+         { signal }
+     ).then(moviesData => {
+@@ -40,7 +42,9 @@
+             isSports: false,
+             isKids: false,
+             isNews: false,
+-            searchTerm
++            searchTerm,
++            startIndex,
++            parentId
+         },
+         { signal }
+     ).then(episodesData => {
+@@ -56,7 +60,9 @@
+         {
+             includeItemTypes: [ BaseItemKind.LiveTvProgram ],
+             isSports: true,
+-            searchTerm
++            searchTerm,
++            startIndex,
++            parentId
+         },
+         { signal }
+     ).then(sportsData => {
+@@ -72,7 +78,9 @@
+         {
+             includeItemTypes: [ BaseItemKind.LiveTvProgram ],
+             isKids: true,
+-            searchTerm
++            searchTerm,
++            startIndex,
++            parentId
+         },
+         { signal }
+     ).then(kidsData => {
+@@ -88,7 +96,9 @@
+         {
+             includeItemTypes: [ BaseItemKind.LiveTvProgram ],
+             isNews: true,
+-            searchTerm
++            searchTerm,
++            startIndex,
++            parentId
+         },
+         { signal }
+     ).then(newsData => {
+@@ -108,7 +118,9 @@
+             isSports: false,
+             isKids: false,
+             isNews: false,
+-            searchTerm
++            searchTerm,
++            startIndex,
++            parentId
+         },
+         { signal }
+     ).then(programsData => {
+@@ -123,7 +135,9 @@
+         userId,
+         {
+             includeItemTypes: [ BaseItemKind.TvChannel ],
+-            searchTerm
++            searchTerm,
++            startIndex,
++            parentId
+         },
+         { signal }
+     ).then(channelsData => {
+diff --git a/src/apps/stable/features/search/api/usePeopleSearch.ts b/src/apps/stable/features/search/api/usePeopleSearch.ts
+--- a/src/apps/stable/features/search/api/usePeopleSearch.ts
++++ b/src/apps/stable/features/search/api/usePeopleSearch.ts
+@@ -8,7 +8,7 @@
+ import { PersonsApiGetPersonsRequest } from '@jellyfin/sdk/lib/generated-client/api/persons-api';
+ import { getPersonsApi } from '@jellyfin/sdk/lib/utils/api/persons-api';
+ 
+-const fetchPeople = async (
++export const fetchPeople = async (
+     api: Api,
+     userId: string,
+     params?: PersonsApiGetPersonsRequest,
+diff --git a/src/apps/stable/features/search/api/useProgramsSearch.ts b/src/apps/stable/features/search/api/useProgramsSearch.ts
+--- a/src/apps/stable/features/search/api/useProgramsSearch.ts
++++ b/src/apps/stable/features/search/api/useProgramsSearch.ts
+@@ -7,7 +7,7 @@
+ import { ItemsApiGetItemsRequest } from '@jellyfin/sdk/lib/generated-client/api/items-api';
+ import { fetchItemsByType } from './fetchItemsByType';
+ 
+-const fetchPrograms = async (
++export const fetchPrograms = async (
+     api: Api,
+     userId: string,
+     params?: ItemsApiGetItemsRequest,
+diff --git a/src/apps/stable/features/search/api/useSearchItems.ts b/src/apps/stable/features/search/api/useSearchItems.ts
+--- a/src/apps/stable/features/search/api/useSearchItems.ts
++++ b/src/apps/stable/features/search/api/useSearchItems.ts
+@@ -1,99 +1,55 @@
+ import { BaseItemKind } from '@jellyfin/sdk/lib/generated-client/models/base-item-kind';
+-import type { BaseItemDto } from '@jellyfin/sdk/lib/generated-client/models/base-item-dto';
+ import { CollectionType } from '@jellyfin/sdk/lib/generated-client/models/collection-type';
+ import { useQuery } from '@tanstack/react-query';
+-import { useApi } from '../../../../../hooks/useApi';
++import { useApi } from 'hooks/useApi';
+ import { addSection, getCardOptionsFromType, getItemTypesFromCollectionType, getTitleFromType, isLivetv, isMovies, isMusic, isTVShows, sortSections } from '../utils/search';
+-import { useArtistsSearch } from './useArtistsSearch';
+-import { usePeopleSearch } from './usePeopleSearch';
+-import { useVideoSearch } from './useVideoSearch';
++import { fetchArtists } from './useArtistsSearch';
++import { fetchPeople } from './usePeopleSearch';
++import { fetchVideos } from './useVideoSearch';
++import { fetchPrograms } from './useProgramsSearch';
++import { fetchLiveTv } from './useLiveTvSearch';
++import { fetchItemsByType } from './fetchItemsByType';
+ import { Section } from '../types';
+-import { useLiveTvSearch } from './useLiveTvSearch';
+-import { fetchItemsByType } from './fetchItemsByType';
+-import { useProgramsSearch } from './useProgramsSearch';
+ import { LIVETV_CARD_OPTIONS } from '../constants/liveTvCardOptions';
+ 
+ export const useSearchItems = (
+     parentId?: string,
+     collectionType?: CollectionType,
+-    searchTerm?: string
++    searchTerm?: string,
++    startIndex = 0
+ ) => {
+-    const { data: artists, isPending: isArtistsPending } = useArtistsSearch(parentId, collectionType, searchTerm);
+-    const { data: people, isPending: isPeoplePending } = usePeopleSearch(parentId, collectionType, searchTerm);
+-    const { data: videos, isPending: isVideosPending } = useVideoSearch(parentId, collectionType, searchTerm);
+-    const { data: programs, isPending: isProgramsPending } = useProgramsSearch(parentId, collectionType, searchTerm);
+-    const { data: liveTvSections, isPending: isLiveTvPending } = useLiveTvSearch(parentId, collectionType, searchTerm);
+     const { api, user } = useApi();
+     const userId = user?.Id;
+-
+-    const isArtistsEnabled = !isArtistsPending || (collectionType && !isMusic(collectionType));
+-    const isPeopleEnabled = !isPeoplePending || (collectionType && !isMovies(collectionType) && !isTVShows(collectionType));
+-    const isVideosEnabled = !isVideosPending || collectionType;
+-    const isProgramsEnabled = !isProgramsPending || collectionType;
+-    const isLiveTvEnabled = !isLiveTvPending || !collectionType || !isLivetv(collectionType);
+-
+     return useQuery({
+-        queryKey: ['Search', 'Items', collectionType, parentId, searchTerm],
++        queryKey: ['Search', 'PagedItems', api?.basePath, userId, collectionType, parentId, searchTerm, startIndex],
+         queryFn: async ({ signal }) => {
+-            if (liveTvSections && collectionType && isLivetv(collectionType)) {
+-                return sortSections(liveTvSections);
++            if (collectionType && isLivetv(collectionType)) {
++                return sortSections(await fetchLiveTv(api!, userId!, searchTerm, signal, startIndex, parentId));
+             }
+-
++            const params = { parentId, searchTerm, startIndex, limit: 100 };
++            const options = { signal };
++            const types = getItemTypesFromCollectionType(collectionType);
++            const [artists, people, videos, programs, searchData] = await Promise.all([
++                !collectionType || isMusic(collectionType) ? fetchArtists(api!, userId!, params, options) : undefined,
++                !collectionType || isMovies(collectionType) || isTVShows(collectionType) ? fetchPeople(api!, userId!, params, options) : undefined,
++                !collectionType ? fetchVideos(api!, userId!, params, options) : undefined,
++                !collectionType ? fetchPrograms(api!, userId!, params, options) : undefined,
++                fetchItemsByType(api!, userId, {
++                    ...params,
++                    includeItemTypes: types,
++                    isMissing: types.includes(BaseItemKind.Episode) && !user?.Configuration?.DisplayMissingEpisodes ? false : undefined
++                }, options)
++            ]);
+             const sections: Section[] = [];
+-
+-            addSection(sections, 'Artists', artists?.Items, {
+-                coverImage: true
+-            });
+-
+-            addSection(sections, 'Programs', programs?.Items, {
+-                ...LIVETV_CARD_OPTIONS
+-            });
+-
+-            addSection(sections, 'People', people?.Items, {
+-                coverImage: true
+-            });
+-
+-            addSection(sections, 'HeaderVideos', videos?.Items, {
+-                showParentTitle: true
+-            });
+-
+-            const itemTypes: BaseItemKind[] = getItemTypesFromCollectionType(collectionType);
+-
+-            const searchData = await fetchItemsByType(
+-                api!,
+-                userId,
+-                {
+-                    includeItemTypes: itemTypes,
+-                    parentId,
+-                    searchTerm,
+-                    isMissing: itemTypes.includes(BaseItemKind.Episode) && !user?.Configuration?.DisplayMissingEpisodes ? false : undefined,
+-                    limit: 800
+-                },
+-                { signal }
+-            );
+-
+-            if (searchData.Items) {
+-                for (const itemType of itemTypes) {
+-                    const items: BaseItemDto[] = [];
+-                    for (const searchItem of searchData.Items) {
+-                        if (searchItem.Type === itemType) {
+-                            items.push(searchItem);
+-                        }
+-                    }
+-                    addSection(sections, getTitleFromType(itemType), items, getCardOptionsFromType(itemType));
+-                }
++            addSection(sections, 'Artists', artists?.Items, { coverImage: true });
++            addSection(sections, 'People', people?.Items, { coverImage: true });
++            addSection(sections, 'HeaderVideos', videos?.Items, { showParentTitle: true });
++            addSection(sections, 'Programs', programs?.Items, LIVETV_CARD_OPTIONS);
++            for (const type of types) {
++                addSection(sections, getTitleFromType(type), searchData.Items?.filter(item => item.Type === type), getCardOptionsFromType(type));
+             }
+-
+             return sortSections(sections);
+         },
+-        enabled: (
+-            !!api
+-            && !!userId
+-            && !!isArtistsEnabled
+-            && !!isPeopleEnabled
+-            && !!isVideosEnabled
+-            && !!isLiveTvEnabled
+-            && !!isProgramsEnabled
+-        )
++        enabled: !!api && !!userId && !!searchTerm
+     });
+ };
+diff --git a/src/apps/stable/features/search/api/useVideoSearch.ts b/src/apps/stable/features/search/api/useVideoSearch.ts
+--- a/src/apps/stable/features/search/api/useVideoSearch.ts
++++ b/src/apps/stable/features/search/api/useVideoSearch.ts
+@@ -9,7 +9,7 @@
+ import { BaseItemKind } from '@jellyfin/sdk/lib/generated-client/models/base-item-kind';
+ import { ItemsApiGetItemsRequest } from '@jellyfin/sdk/lib/generated-client/api/items-api';
+ 
+-const fetchVideos = async (
++export const fetchVideos = async (
+     api: Api,
+     userId: string,
+     params?: ItemsApiGetItemsRequest,
+diff --git a/src/apps/stable/features/search/components/SearchResults.tsx b/src/apps/stable/features/search/components/SearchResults.tsx
+--- a/src/apps/stable/features/search/components/SearchResults.tsx
++++ b/src/apps/stable/features/search/components/SearchResults.tsx
+@@ -1,4 +1,4 @@
+-import React, { type FC } from 'react';
++import React, { type FC, useCallback, useEffect, useRef, useState } from 'react';
+ import { useSearchItems } from '../api/useSearchItems';
+ import globalize from 'lib/globalize';
+ import Loading from 'components/loading/LoadingComponent';
+@@ -7,6 +7,7 @@
+ import { CollectionType } from '@jellyfin/sdk/lib/generated-client/models/collection-type';
+ import { Section } from '../types';
+ import { Link } from 'react-router-dom';
++import { mergeSearchPage } from '../utils/mergePages';
+ 
+ interface SearchResultsProps {
+     parentId?: string;
+@@ -14,58 +15,88 @@
+     query?: string;
+ }
+ 
+-/*
+- * React component to display search result rows for global search and library view search
+- */
+-const SearchResults: FC<SearchResultsProps> = ({
+-    parentId,
+-    collectionType,
+-    query
+-}) => {
+-    const { data, isPending } = useSearchItems(parentId, collectionType, query?.trim());
++function gridShape(shape?: CardShape) {
++    if (shape === CardShape.SquareOverflow) return CardShape.Square;
++    if (shape === CardShape.PortraitOverflow) return CardShape.Portrait;
++    return CardShape.Auto;
++}
+ 
+-    if (isPending) return <Loading />;
++const PagedSearchResults: FC<SearchResultsProps> = ({ parentId, collectionType, query }) => {
++    const [startIndex, setStartIndex] = useState(0);
++    const [sections, setSections] = useState<Section[]>([]);
++    const [hasMore, setHasMore] = useState(true);
++    const { data, isPending, isFetching, isError, refetch } = useSearchItems(parentId, collectionType, query?.trim(), startIndex);
++    const sentinel = useRef<HTMLButtonElement>(null);
++    const lastPage = useRef(-1);
++    const currentSections = useRef<Section[]>([]);
++    const loadingNext = useRef(false);
+ 
+-    if (!data?.length) {
+-        return (
+-            <div className='noItemsMessage centerMessage'>
+-                {globalize.translate('SearchResultsEmpty', query)}
+-                {collectionType && (
+-                    <div>
+-                        <Link
+-                            className='emby-button'
+-                            to={`/search?query=${encodeURIComponent(query || '')}`}
+-                        >{globalize.translate('RetryWithGlobalSearch')}</Link>
+-                    </div>
+-                )}
+-            </div>
+-        );
++    useEffect(() => {
++        if (!data || lastPage.current === startIndex) return;
++        const merged = mergeSearchPage(currentSections.current, data);
++        lastPage.current = startIndex;
++        currentSections.current = merged.sections;
++        setSections(merged.sections);
++        setHasMore(merged.added > 0 && data.reduce((total, section) => total + section.items.length, 0) >= 100);
++        loadingNext.current = false;
++    }, [data, startIndex]);
++
++    const loadMore = useCallback(() => {
++        if (hasMore && !isFetching && !isError && !loadingNext.current && lastPage.current === startIndex) {
++            loadingNext.current = true;
++            setStartIndex(index => index + 100);
++        }
++    }, [hasMore, isFetching, isError, startIndex]);
++
++    useEffect(() => {
++        const target = sentinel.current;
++        if (!target || !hasMore || isFetching || isError) return;
++        const observer = new IntersectionObserver(entries => {
++            if (entries.some(entry => entry.isIntersecting)) loadMore();
++        }, { rootMargin: '400px 0px' });
++        observer.observe(target);
++        return () => observer.disconnect();
++    }, [hasMore, isFetching, isError, loadMore, sections]);
++
++    const handleMore = useCallback(() => {
++        if (isError) void refetch();
++        else loadMore();
++    }, [isError, refetch, loadMore]);
++
++    if (isPending && !sections.length) return <Loading />;
++    if (!sections.length && !hasMore && !isError) {
++        return <div className='noItemsMessage centerMessage'>
++            {globalize.translate('SearchResultsEmpty', query)}
++            {collectionType && <div><Link className='emby-button' to={`/search?query=${encodeURIComponent(query || '')}`}>
++                {globalize.translate('RetryWithGlobalSearch')}
++            </Link></div>}
++        </div>;
+     }
+-
+-    const renderSection = (section: Section, index: number) => {
+-        return (
+-            <SearchResultsRow
+-                key={`${section.title}-${index}`}
+-                title={globalize.translate(section.title)}
+-                items={section.items}
+-                cardOptions={{
+-                    shape: CardShape.AutoOverflow,
+-                    scalable: true,
+-                    showTitle: true,
+-                    overlayText: false,
+-                    centerText: true,
+-                    allowBottomPadding: false,
+-                    ...section.cardOptions
+-                }}
+-            />
+-        );
+-    };
+-
+-    return (
+-        <div className={'searchResults padded-top padded-bottom-page'}>
+-            {data.map((section, index) => renderSection(section, index))}
+-        </div>
+-    );
++    return <div className='searchResults padded-top padded-bottom-page'>
++        {sections.map(section => <SearchResultsRow
++            key={section.title}
++            title={globalize.translate(section.title)}
++            items={section.items}
++            cardOptions={{
++                scalable: true, showTitle: true, overlayText: false, centerText: true,
++                ...section.cardOptions,
++                shape: gridShape(section.cardOptions?.shape),
++                allowBottomPadding: true
++            }}
++        />)}
++        {(hasMore || isError) && <button
++            ref={sentinel}
++            type='button'
++            className='emby-button raised'
++            disabled={isFetching}
++            onClick={handleMore}
++        >{globalize.translate(isError ? 'Retry' : 'ButtonMore')}</button>}
++    </div>;
+ };
+ 
++// Remount all page state when the search scope changes; old requests are cancelled.
++const SearchResults: FC<SearchResultsProps> = props => <PagedSearchResults
++    key={JSON.stringify([props.parentId, props.collectionType, props.query?.trim()])}
++    {...props}
++/>;
+ export default SearchResults;
+diff --git a/src/apps/stable/features/search/components/SearchResultsRow.tsx b/src/apps/stable/features/search/components/SearchResultsRow.tsx
+--- a/src/apps/stable/features/search/components/SearchResultsRow.tsx
++++ b/src/apps/stable/features/search/components/SearchResultsRow.tsx
+@@ -3,7 +3,7 @@
+ 
+ import cardBuilder from 'components/cardbuilder/cardBuilder';
+ import type { CardOptions } from 'types/cardOptions';
+-import 'elements/emby-scroller/emby-scroller';
++
+ import 'elements/emby-itemscontainer/emby-itemscontainer';
+ 
+ // There seems to be some compatibility issues here between
+@@ -11,9 +11,7 @@
+ // them as an html string for now =/
+ const createScroller = ({ title = '' }) => ({
+     __html: `<h2 class="sectionTitle sectionTitle-cards focuscontainer-x padded-left padded-right">${title}</h2>
+-    <div is="emby-scroller" data-horizontal="true" data-centerfocus="card" class="padded-top-focusscale padded-bottom-focusscale">
+-    <div is="emby-itemscontainer" class="focuscontainer-x itemsContainer scrollSlider"></div>
+-</div>`
++    <div is="emby-itemscontainer" class="itemsContainer vertical-wrap padded-left padded-right"></div>`
+ });
+ 
+ interface SearchResultsRowProps {
+diff --git a/src/apps/stable/features/search/utils/mergePages.ts b/src/apps/stable/features/search/utils/mergePages.ts
+new file mode 100644
+--- /dev/null
++++ b/src/apps/stable/features/search/utils/mergePages.ts
+@@ -0,0 +1,23 @@
++import { Section } from '../types';
++import { sortSections } from './search';
++
++export function mergeSearchPage(previous: Section[], page: Section[]) {
++    const sections = previous.map(section => ({ ...section, items: section.items.slice() }));
++    let added = 0;
++    for (const next of page) {
++        let section = sections.find(existing => existing.title === next.title);
++        if (!section) {
++            section = { ...next, items: [] };
++            sections.push(section);
++        }
++        const seen = new Set(section.items.map(item => item.Id));
++        for (const item of next.items) {
++            if (!seen.has(item.Id)) {
++                section.items.push(item);
++                seen.add(item.Id);
++                added++;
++            }
++        }
++    }
++    return { sections: sortSections(sections), added };
++}
+diff --git a/src/apps/stable/features/search/utils/search.ts b/src/apps/stable/features/search/utils/search.ts
+--- a/src/apps/stable/features/search/utils/search.ts
++++ b/src/apps/stable/features/search/utils/search.ts
+@@ -76,6 +76,9 @@
+ 
+ export function getTitleFromType(type: BaseItemKind) {
+     switch (type) {
++        case BaseItemKind.Video:
++        case BaseItemKind.MusicVideo:
++            return 'HeaderVideos';
+         case BaseItemKind.Movie:
+             return 'Movies';
+         case BaseItemKind.Series:
+@@ -107,8 +110,10 @@
+     }
+ }
+ 
+-export function getItemTypesFromCollectionType(collectionType: CollectionType | undefined) {
++export function getItemTypesFromCollectionType(collectionType: CollectionType | undefined): BaseItemKind[] {
+     switch (collectionType) {
++        case CollectionType.Homevideos:
++            return [BaseItemKind.Video, BaseItemKind.MusicVideo, BaseItemKind.Photo, BaseItemKind.PhotoAlbum];
+         case CollectionType.Movies:
+             return [ BaseItemKind.Movie ];
+         case CollectionType.Tvshows:
+diff --git a/src/controllers/favorites.js b/src/controllers/favorites.js
+--- a/src/controllers/favorites.js
++++ b/src/controllers/favorites.js
+@@ -11,10 +11,10 @@
+ import { getBackdropShape, getPortraitShape, getSquareShape } from 'utils/card';
+ 
+ import 'elements/emby-itemscontainer/emby-itemscontainer';
+-import 'elements/emby-scroller/emby-scroller';
++import { createPagedItems } from '../scripts/pagedItems';
+ 
+ function enableScrollX() {
+-    return true;
++    return false;
+ }
+ 
+ function getSections() {
+@@ -174,7 +174,7 @@
+ }
+ 
+ function getFetchDataFn(section) {
+-    return function () {
++    return function (startIndex = 0, limit = 100) {
+         const apiClient = this.apiClient;
+         const options = {
+             SortBy: [ItemSortBy.SeriesSortName, ItemSortBy.SortName].join(','),
+@@ -184,9 +184,10 @@
+             Fields: 'PrimaryImageAspectRatio',
+             CollapseBoxSetItems: false,
+             ExcludeLocationTypes: 'Virtual',
+-            EnableTotalRecordCount: false
++            EnableTotalRecordCount: true
+         };
+-        options.Limit = 20;
++        options.Limit = limit;
++        options.StartIndex = startIndex;
+         const userId = apiClient.getCurrentUserId();
+ 
+         if (section.types === 'MusicArtist') {
+@@ -284,7 +285,7 @@
+         }
+ 
+         html += '</div>';
+-        html += '<div is="emby-scroller" class="padded-top-focusscale padded-bottom-focusscale" data-centerfocus="true"><div is="emby-itemscontainer" class="itemsContainer scrollSlider focuscontainer-x" data-monitor="markfavorite"></div></div>';
++        html += '<div is="emby-itemscontainer" class="itemsContainer vertical-wrap padded-left padded-right" data-monitor="markfavorite"></div><button type="button" class="emby-button moreItems hide">' + globalize.translate('ButtonMore') + '</button>';
+         html += '</div>';
+     }
+ 
+@@ -295,7 +296,34 @@
+ 
+     for (let i = 0, length = elems.length; i < length; i++) {
+         const itemsContainer = elems[i];
+-        itemsContainer.fetchData = getFetchDataFn(sections[i]).bind(instance);
++        const button = itemsContainer.parentElement.querySelector('.moreItems');
++        const pager = createPagedItems(getFetchDataFn(sections[i]).bind(instance));
++        let append = false;
++        const loadMore = () => {
++            if (itemsContainer.paused || pager.loading || !pager.hasMore) return;
++            append = true;
++            itemsContainer.refreshItems().catch(() => { /* The section button offers an explicit retry. */ });
++        };
++        const observer = new IntersectionObserver(entries => {
++            if (entries.some(entry => entry.isIntersecting)) loadMore();
++        }, { rootMargin: '400px 0px' });
++        button.addEventListener('click', loadMore);
++        itemsContainer.fetchData = () => {
++            const next = append;
++            append = false;
++            observer.disconnect();
++            return pager.fetch(next).then(result => {
++                button.classList.toggle('hide', !pager.hasMore);
++                button.textContent = globalize.translate('ButtonMore');
++                if (pager.hasMore && !itemsContainer.paused) observer.observe(button);
++                return result;
++            }).catch(error => {
++                button.classList.remove('hide');
++                button.textContent = globalize.translate('Retry');
++                throw error;
++            });
++        };
++        instance.pagers.push({ observer, button, pager, loadMore });
+         itemsContainer.getItemsHtml = getItemsHtmlFn(sections[i]).bind(instance);
+         itemsContainer.parentContainer = dom.parentWithClass(itemsContainer, 'verticalSection');
+     }
+@@ -307,6 +335,7 @@
+         this.params = params;
+         this.apiClient = ServerConnections.currentApiClient();
+         this.sectionsContainer = view.querySelector('.sections');
++        this.pagers = [];
+         createSections(this, this.sectionsContainer, this.apiClient);
+     }
+ 
+@@ -319,7 +348,10 @@
+             promises.push(elem.resume(options));
+         }
+ 
+-        Promise.all(promises).then(function () {
++        Promise.all(promises).then(() => {
++            for (const entry of this.pagers) {
++                if (entry.pager.hasMore) entry.observer.observe(entry.button);
++            }
+             if (options.autoFocus) {
+                 focusManager.autoFocus(view);
+             }
+@@ -327,6 +359,9 @@
+     }
+ 
+     onPause() {
++        this.pagers.forEach(entry => {
++            entry.observer.disconnect();
++        });
+         if (this.sectionsContainer) {
+             Array.from(this.sectionsContainer.querySelectorAll('.itemsContainer'))
+                 .forEach(e => { e.pause(); });
+@@ -334,6 +369,12 @@
+     }
+ 
+     destroy() {
++        this.pagers.forEach(entry => {
++            entry.observer.disconnect();
++            entry.button.removeEventListener('click', entry.loadMore);
++            entry.pager.dispose();
++        });
++        this.pagers = [];
+         this.view = null;
+         this.params = null;
+         this.apiClient = null;
+diff --git a/src/scripts/pagedItems.js b/src/scripts/pagedItems.js
+new file mode 100644
+--- /dev/null
++++ b/src/scripts/pagedItems.js
+@@ -0,0 +1,50 @@
++// A page is consumed by server offset, while IDs are de-duplicated for display.
++export function createPagedItems(fetchPage, pageSize = 100) {
++    let items = [];
++    let offset = 0;
++    let hasMore = true;
++    let loading = false;
++    let generation = 0;
++    let latest;
++    let disposed = false;
++    return {
++        get loading() { return loading; },
++        get hasMore() { return hasMore; },
++        dispose() {
++            disposed = true;
++            generation++;
++        },
++        fetch(append = false) {
++            if (disposed) return Promise.resolve({ Items: [], TotalRecordCount: 0, StartIndex: 0 });
++            if (append && loading) return latest;
++            const current = ++generation;
++            const start = append ? offset : 0;
++            const limit = append ? pageSize : Math.max(pageSize, offset);
++            loading = true;
++            latest = Promise.resolve().then(() => fetchPage(start, limit)).then(result => {
++                if (disposed) return { Items: [], TotalRecordCount: 0, StartIndex: 0 };
++                if (current !== generation) return latest;
++                const page = result.Items || [];
++                const combined = append ? items.slice() : [];
++                const seen = new Set(combined.map(item => item.Id));
++                let added = 0;
++                for (const item of page) {
++                    if (!seen.has(item.Id)) {
++                        seen.add(item.Id);
++                        combined.push(item);
++                        added++;
++                    }
++                }
++                items = combined;
++                offset = start + page.length;
++                hasMore = page.length > 0 && (!append || added > 0)
++                    && (Number.isFinite(result.TotalRecordCount) ?
++                        offset < result.TotalRecordCount : page.length >= limit);
++                return { ...result, Items: items, StartIndex: 0 };
++            }).finally(() => {
++                if (current === generation) loading = false;
++            });
++            return latest;
++        }
++    };
++}

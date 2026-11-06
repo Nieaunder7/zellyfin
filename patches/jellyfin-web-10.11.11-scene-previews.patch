@@ -1,0 +1,163 @@
+diff --git a/src/scripts/trickplayPreviews.js b/src/scripts/trickplayPreviews.js
+--- a/src/scripts/trickplayPreviews.js
++++ b/src/scripts/trickplayPreviews.js
+@@ -1,4 +1,5 @@
+ const PREVIEW_POINTS = [0.25, 0.5, 0.75];
++const scenePreviewCache = new WeakMap();
+ 
+ function formatTime(milliseconds) {
+     const seconds = Math.floor(milliseconds / 1000);
+@@ -71,6 +72,65 @@
+ 
+ export function createTrickplayPreviewStrip(item, apiClient) {
+     const frames = getTrickplayFrames(item, apiClient);
++    return createPreviewStrip(frames);
++}
++
++export async function getScenePreviewFrames(item, apiClient, limit = 6) {
++    if (item?.MediaType !== 'Video' || !item.Id || !apiClient?.getJSON) return [];
++
++    let items = scenePreviewCache.get(apiClient);
++    if (!items) {
++        items = new Map();
++        scenePreviewCache.set(apiClient, items);
++    }
++    let request = items.get(item.Id);
++    if (!request) {
++        request = apiClient.getJSON(apiClient.getUrl(`SceneAnalysis/Items/${item.Id}`))
++            .then(data => {
++                if ((data.status ?? data.Status) !== 'complete') {
++                    items.delete(item.Id);
++                    return [];
++                }
++                const scenes = (data.scenes ?? data.Scenes ?? [])
++                    .filter(scene => Number.isFinite(scene.timeTicks ?? scene.TimeTicks)
++                        && (scene.imageUrl ?? scene.ImageUrl))
++                    .sort((left, right) => (left.timeTicks ?? left.TimeTicks) - (right.timeTicks ?? right.TimeTicks));
++                if (!scenes.length) items.delete(item.Id);
++                return scenes;
++            })
++            .catch(() => {
++                items.delete(item.Id);
++                return [];
++            });
++        items.set(item.Id, request);
++        if (items.size > 150) items.delete(items.keys().next().value);
++    }
++
++    const scenes = await request;
++    const count = Math.min(Math.max(1, limit), scenes.length);
++    const durationTicks = item.RunTimeTicks || item.MediaSources?.[0]?.RunTimeTicks;
++    return Array.from({ length: count }, (_, index) => {
++        const scene = scenes[Math.round(index * (scenes.length - 1) / Math.max(1, count - 1))];
++        const timeTicks = scene.timeTicks ?? scene.TimeTicks;
++        const percent = Number.isFinite(durationTicks) && durationTicks > 0
++            ? Math.round(timeTicks * 100 / durationTicks) : null;
++        return {
++            percent,
++            time: formatTime(timeTicks / 10000),
++            url: apiClient.getUrl(scene.imageUrl ?? scene.ImageUrl, { ApiKey: apiClient.accessToken() }),
++            aspectRatio: '16 / 9',
++            backgroundSize: 'contain',
++            backgroundPosition: 'center'
++        };
++    });
++}
++
++export async function createStoryPreviewStrip(item, apiClient, limit = 6) {
++    const sceneFrames = await getScenePreviewFrames(item, apiClient, limit);
++    return sceneFrames.length ? createPreviewStrip(sceneFrames) : createTrickplayPreviewStrip(item, apiClient);
++}
++
++function createPreviewStrip(frames) {
+     if (!frames.length) return null;
+ 
+     const strip = document.createElement('div');
+@@ -81,13 +141,14 @@
+         const image = document.createElement('div');
+         image.className = 'storyPreviewImage';
+         image.setAttribute('role', 'img');
+-        image.setAttribute('aria-label', `${frame.percent}% · ${frame.time}`);
++        const label = frame.percent === null ? frame.time : `${frame.percent}% · ${frame.time}`;
++        image.setAttribute('aria-label', label);
+         image.style.aspectRatio = frame.aspectRatio;
+         image.style.backgroundImage = `url(${JSON.stringify(frame.url)})`;
+         image.style.backgroundSize = frame.backgroundSize;
+         image.style.backgroundPosition = frame.backgroundPosition;
+         const caption = document.createElement('figcaption');
+-        caption.textContent = `${frame.percent}% · ${frame.time}`;
++        caption.textContent = label;
+         figure.append(image, caption);
+         strip.appendChild(figure);
+     }
+diff --git a/src/components/cardbuilder/cardBuilder.js b/src/components/cardbuilder/cardBuilder.js
+--- a/src/components/cardbuilder/cardBuilder.js
++++ b/src/components/cardbuilder/cardBuilder.js
+@@ -10,7 +10,7 @@
+ 
+ import browser from 'scripts/browser';
+ import datetime from 'scripts/datetime';
+-import { createTrickplayPreviewStrip } from 'scripts/trickplayPreviews';
++import { createStoryPreviewStrip } from 'scripts/trickplayPreviews';
+ import dom from 'utils/dom';
+ import globalize from 'lib/globalize';
+ import { ServerConnections } from 'lib/jellyfin-apiclient';
+@@ -99,7 +99,8 @@
+ 
+         const item = await itemPromise;
+         if (activeStoryCard !== card || !card.isConnected || !item) return;
+-        const strip = createTrickplayPreviewStrip(item, apiClient);
++        const strip = await createStoryPreviewStrip(item, apiClient, 6);
++        if (activeStoryCard !== card || !card.isConnected) return;
+         if (!strip) return;
+ 
+         const panel = document.createElement('div');
+diff --git a/src/controllers/itemDetails/index.js b/src/controllers/itemDetails/index.js
+--- a/src/controllers/itemDetails/index.js
++++ b/src/controllers/itemDetails/index.js
+@@ -28,7 +28,7 @@
+ import { ServerConnections } from 'lib/jellyfin-apiclient';
+ import browser from 'scripts/browser';
+ import datetime from 'scripts/datetime';
+-import { createTrickplayPreviewStrip } from 'scripts/trickplayPreviews';
++import { createStoryPreviewStrip } from 'scripts/trickplayPreviews';
+ import { clearSceneAnalysis, renderSceneAnalysis } from 'scripts/sceneAnalysis';
+ import dom from 'utils/dom';
+ import { download } from 'scripts/fileDownloader';
+@@ -969,11 +969,15 @@
+     }
+ }
+ 
+-function renderStoryPreview(page, item, apiClient) {
++async function renderStoryPreview(page, item, apiClient) {
+     const section = page.querySelector('.storyPreviewDetail');
++    if (!section) return;
+     const content = section.querySelector('.storyPreviewContent');
+-    const strip = createTrickplayPreviewStrip(item, apiClient);
++    section.dataset.itemId = item.Id;
+     content.replaceChildren();
++    section.classList.add('hide');
++    const strip = await createStoryPreviewStrip(item, apiClient, 12);
++    if (section.dataset.itemId !== item.Id) return;
+     section.classList.toggle('hide', !strip);
+     if (strip) content.appendChild(strip);
+ }
+diff --git a/src/components/cardbuilder/card.scss b/src/components/cardbuilder/card.scss
+--- a/src/components/cardbuilder/card.scss
++++ b/src/components/cardbuilder/card.scss
+@@ -904,6 +904,15 @@
+     width: 100%;
+ }
+ 
++.storyPreviewDetail .storyPreviewStrip {
++    grid-template-columns: repeat(4, minmax(0, 1fr));
++}
++
++@media (max-width: 600px) {
++    .storyPreviewDetail .storyPreviewStrip {
++        grid-template-columns: repeat(2, minmax(0, 1fr));
++    }
++}
+ 
+ .storyPreviewFrame {
+     min-width: 0;

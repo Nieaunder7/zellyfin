@@ -1,0 +1,252 @@
+diff --git a/src/controllers/playback/video/index.js b/src/controllers/playback/video/index.js
+--- a/src/controllers/playback/video/index.js
++++ b/src/controllers/playback/video/index.js
+@@ -1,4 +1,7 @@
+ import escapeHtml from 'escape-html';
++import confirm from 'components/confirm/confirm';
++import alert from 'components/alert';
++import { canDeletePlayingFile, createPlayerFileDeletion, formatFileSize } from '../../../scripts/playerFileActions';
+ 
+ import { PlayerEvent } from 'apps/stable/features/playback/constants/playerEvent';
+ import { AppFeature } from 'constants/appFeature';
+@@ -104,12 +107,104 @@
+         });
+     }
+ 
++    let deleteFileItem;
++    let deletingPlayback = false;
++    let fileViewActive = false;
++    let fileActionGeneration = 0;
++
++    async function updateFileActions(item) {
++        const generation = ++fileActionGeneration;
++        const button = view.querySelector('.btnDeletePlayingFile');
++        const label = view.querySelector('.osdFileSize');
++        const source = playbackManager.currentMediaSource(currentPlayer);
++        const showSize = size => {
++            label.textContent = globalize.translate('FileSize') + ': '
++                + (formatFileSize(size) || globalize.translate('Unknown'));
++        };
++        showSize(source?.Size);
++        button.classList.add('hide');
++        deleteFileItem = null;
++        if (!item?.ServerId || !currentPlayer?.isLocalPlayer) return;
++        try {
++            const api = ServerConnections.getApiClient(item.ServerId);
++            const full = await api.getItem(api.getCurrentUserId(), item.Id);
++            if (generation !== fileActionGeneration || currentItem?.Id !== item.Id) return;
++            full.ServerId = item.ServerId;
++            const matchingSource = full.MediaSources?.find(entry => entry.Id === source?.Id);
++            showSize(source?.Size ?? matchingSource?.Size);
++            if (canDeletePlayingFile(full, source)) {
++                deleteFileItem = full;
++                button.classList.remove('hide');
++            }
++        } catch {
++            // Keep size from playback info; deletion requires fresh server permissions.
++        }
++    }
++
++    const deletePlayingFile = createPlayerFileDeletion({
++        confirm: async (item, source) => {
++            try {
++                await confirm({
++                    title: globalize.translate('HeaderDeleteItem'),
++                    text: escapeHtml(item.Name) + '<br>' + escapeHtml(source.Path)
++                        + '<br><br>' + globalize.translate('ConfirmDeletePlayingFile'),
++                    confirmText: globalize.translate('Delete'),
++                    primary: 'delete'
++                });
++                return true;
++            } catch {
++                return false;
++            }
++        },
++        refresh: item => {
++            const api = ServerConnections.getApiClient(item.ServerId);
++            return api.getItem(api.getCurrentUserId(), item.Id);
++        },
++        isCurrent: (item, source) => fileViewActive
++            && playbackManager.getCurrentPlayer() === currentPlayer
++            && playbackManager.currentItem(currentPlayer)?.Id === item.Id
++            && playbackManager.currentMediaSource(currentPlayer)?.Id === source.Id
++            && playbackManager.currentMediaSource(currentPlayer)?.Path === source.Path,
++        getQueue: () => playbackManager.getPlaylist(currentPlayer),
++        getIndex: () => playbackManager.getCurrentPlaylistIndex(currentPlayer),
++        stop: async () => {
++            const player = currentPlayer;
++            const state = playbackManager.getPlayerState(player);
++            const api = ServerConnections.getApiClient(currentItem.ServerId);
++            deletingPlayback = true;
++            await playbackManager.stop(player);
++            // Stop transcoding on the server as well, releasing its file handle.
++            if (state.PlayState?.PlaySessionId) {
++                await api.stopActiveEncodings(state.PlayState.PlaySessionId);
++            }
++        },
++        remove: item => ServerConnections.getApiClient(item.ServerId).deleteItem(item.Id),
++        play: items => fileViewActive ? playbackManager.play({ items, startPositionTicks: 0 }) : Promise.resolve(),
++        finish: () => { if (fileViewActive) appRouter.back(); }
++    });
++
++    async function onDeletePlayingFile() {
++        const button = view.querySelector('.btnDeletePlayingFile');
++        if (button.disabled || !deleteFileItem) return;
++        button.disabled = true;
++        try {
++            await deletePlayingFile(deleteFileItem, playbackManager.currentMediaSource(currentPlayer));
++        } catch {
++            await alert(globalize.translate('ErrorDeletingPlayingFile'));
++            if (deletingPlayback && fileViewActive && !playbackManager.isPlayingVideo()) appRouter.back();
++        } finally {
++            deletingPlayback = false;
++            button.disabled = false;
++        }
++    }
++
+     function updateDisplayItem(itemInfo) {
+         const item = itemInfo.originalItem;
+         currentItem = item;
+         const displayItem = itemInfo.displayItem || item;
+         updateRecordingButton(displayItem);
+         updateCollectionButton(item);
++        void updateFileActions(item);
+         let parentName = displayItem.SeriesName || displayItem.Album;
+ 
+         if (displayItem.EpisodeTitle || displayItem.IsSeries) {
+@@ -580,7 +675,7 @@
+         resetUpNextDialog();
+         console.debug('nowplaying event: ' + e.type);
+ 
+-        if (state.NextMediaType !== 'Video') {
++        if (!deletingPlayback && state.NextMediaType !== 'Video') {
+             view.removeEventListener('viewbeforehide', onViewHideStopPlayback);
+             appRouter.back();
+         }
+@@ -1709,6 +1804,7 @@
+         setBackdropTransparency(TRANSPARENCY_LEVEL.Full);
+     });
+     view.addEventListener('viewshow', function () {
++        fileViewActive = true;
+         try {
+             Events.on(playbackManager, 'playerchange', onPlayerChange);
+             bindToPlayer(playbackManager.getCurrentPlayer());
+@@ -1757,6 +1853,8 @@
+         }
+     });
+     view.addEventListener('viewbeforehide', function () {
++        fileViewActive = false;
++        fileActionGeneration++;
+         if (statsOverlay) {
+             statsOverlay.enabled(false);
+         }
+@@ -2001,7 +2099,8 @@
+     view.querySelector('.btnAudio').addEventListener('click', showAudioTrackSelection);
+     view.querySelector('.btnSubtitles').addEventListener('click', showSubtitleTrackSelection);
+ 
+-    // HACK: Remove `emby-button` from the rating button to make it look like the other buttons
++    view.querySelector('.btnDeletePlayingFile').addEventListener('click', onDeletePlayingFile);
++    // Match the rating button appearance to the other player controls.
+     view.querySelector('.btnUserRating').classList.remove('emby-button');
+ 
+     // Register to SyncPlay playback events and show big animated icon
+diff --git a/src/controllers/playback/video/index.html b/src/controllers/playback/video/index.html
+--- a/src/controllers/playback/video/index.html
++++ b/src/controllers/playback/video/index.html
+@@ -17,6 +17,7 @@
+             </div>
+ 
+             <div class="osdTextContainer osdSecondaryMediaInfo"></div>
++            <div class="osdTextContainer osdFileSize" aria-live="polite"></div>
+ 
+             <div class="flex flex-direction-row align-items-center" dir="ltr">
+                 <div class="osdTextContainer startTimeText osdPositionText" style="margin: 0 .25em 0 0;"></div>
+@@ -70,6 +71,10 @@
+                     <span class="xlargePaperIconButton material-icons favorite" aria-hidden="true"></span>
+                 </button>
+ 
++                <button is="paper-icon-button-light" type="button" class="btnDeletePlayingFile hide autoSize" title="${DeletePlayingFile}" aria-label="${DeletePlayingFile}">
++                    <span class="xlargePaperIconButton material-icons delete" aria-hidden="true"></span>
++                </button>
++
+                 <button is="paper-icon-button-light" class="btnAddToCollection hide autoSize" title="${AddToCollection}" aria-label="${AddToCollection}">
+                     <span class="xlargePaperIconButton material-icons library_add" aria-hidden="true"></span>
+                 </button>
+diff --git a/src/strings/en-us.json b/src/strings/en-us.json
+--- a/src/strings/en-us.json
++++ b/src/strings/en-us.json
+@@ -1871,5 +1871,8 @@
+     "ExtractTrickplayImagesHelp": "Trickplay images are similar to chapter images, except they span the entire length of the content and are used to show a preview when scrubbing through videos.",
+     "LabelExtractTrickplayDuringLibraryScan": "Extract trickplay images during the library scan",
+     "LabelExtractTrickplayDuringLibraryScanHelp": "Generate trickplay images when videos are imported during the library scan. Otherwise, they will be extracted during the trickplay images scheduled task. If generation is set to non-blocking this will not affect the time a library scan takes to complete.",
+-    "LogLoadFailure": "Failed to load the log file. It may still be actively written to."
++    "LogLoadFailure": "Failed to load the log file. It may still be actively written to.",
++    "DeletePlayingFile": "Delete playing file",
++    "ConfirmDeletePlayingFile": "Permanently delete this file from storage and the library? Playback will stop after confirmation. After successful deletion, the next queued item will play; if there is none, the player will close. Associated subtitles and artwork may also be removed.",
++    "ErrorDeletingPlayingFile": "The delete-and-play-next action could not be completed. Check the file and permissions before trying again."
+ }
+diff --git a/src/strings/ko.json b/src/strings/ko.json
+--- a/src/strings/ko.json
++++ b/src/strings/ko.json
+@@ -1992,5 +1992,8 @@
+     "DeleteServerConfirmation": "이 서버를 삭제하시겠습니까?",
+     "LibraryNameInvalid": "라이브러리 이름은 비워둘 수 없습니다.",
+     "Inker": "잉커",
+-    "Retry": "재시도"
++    "Retry": "재시도",
++    "DeletePlayingFile": "재생 중인 파일 삭제",
++    "ConfirmDeletePlayingFile": "이 파일을 저장장치와 라이브러리에서 영구 삭제하시겠습니까? 승인하면 재생을 중단하고 삭제합니다. 삭제가 완료되면 재생목록의 다음 항목을 재생하며, 다음 항목이 없으면 플레이어를 닫습니다. 연결된 자막과 이미지도 삭제될 수 있습니다.",
++    "ErrorDeletingPlayingFile": "파일 삭제 후 다음 재생 작업을 완료하지 못했습니다. 파일 상태와 삭제 권한을 확인해 주세요."
+ }
+diff --git a/src/scripts/playerFileActions.js b/src/scripts/playerFileActions.js
+new file mode 100644
+--- /dev/null
++++ b/src/scripts/playerFileActions.js
+@@ -0,0 +1,47 @@
++export function formatFileSize(size) {
++    if (!Number.isFinite(size) || size < 0) return null;
++    const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
++    const index = size > 0 ? Math.min(Math.floor(Math.log(size) / Math.log(1024)), units.length - 1) : 0;
++    return `${(size / (1024 ** index)).toLocaleString(undefined, { maximumFractionDigits: 2 })} ${units[index]}`;
++}
++
++// The item deletion API also deletes alternate versions and multipart media.
++// Offer this single-file action only when its scope is exactly one local file.
++export function canDeletePlayingFile(item, source) {
++    return Boolean(item?.CanDelete && !item.IsFolder && item.MediaType === 'Video'
++        && item.LocationType === 'FileSystem' && (item.PartCount || 0) <= 1
++        && (item.MediaSourceCount || 0) <= 1 && item.MediaSources?.length === 1
++        && source?.Protocol === 'File' && !source.IsRemote && source.Path
++        && item.MediaSources[0].Id === source.Id && item.MediaSources[0].Path === source.Path
++        && (!item.VideoType || item.VideoType === 'VideoFile'));
++}
++
++// Confirmation, fresh permissions and identity checks all precede stopping.
++// Keep remaining entries before stop(), which resets Jellyfin's local queue.
++export function createPlayerFileDeletion(deps) {
++    let busy = false;
++    return async function (item, source) {
++        if (busy) return 'busy';
++        busy = true;
++        try {
++            if (!canDeletePlayingFile(item, source)) throw new Error('Unsupported deletion');
++            if (!await deps.confirm(item, source)) return 'cancelled';
++            const fresh = await deps.refresh(item);
++            if (!canDeletePlayingFile(fresh, source) || !deps.isCurrent(item, source)) {
++                throw new Error('Playback or deletion scope changed');
++            }
++            const queue = await deps.getQueue();
++            if (!deps.isCurrent(item, source)) throw new Error('Playback changed');
++            const index = deps.getIndex();
++            if (index < 0 || queue[index]?.Id !== item.Id) throw new Error('Queue changed');
++            const remaining = queue.slice(index + 1).filter(entry => entry.Id !== item.Id);
++            await deps.stop();
++            await deps.remove(item);
++            if (remaining.length) await deps.play(remaining);
++            else await deps.finish();
++            return 'deleted';
++        } finally {
++            busy = false;
++        }
++    };
++}

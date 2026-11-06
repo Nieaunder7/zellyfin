@@ -1,0 +1,133 @@
+diff --git a/src/controllers/list.js b/src/controllers/list.js
+--- a/src/controllers/list.js
++++ b/src/controllers/list.js
+@@ -2,6 +2,7 @@
+ import listView from '../components/listview/listview';
+ import * as userSettings from '../scripts/settings/userSettings';
+ import { getPageSize, setPageSize, PAGE_SIZE_CHANGE } from '../scripts/listPageSize';
++import { formatSceneTime, getSceneSearchPosition } from '../scripts/sceneSearchPosition';
+ import focusManager from '../components/focusManager';
+ import cardBuilder from '../components/cardbuilder/cardBuilder';
+ import loading from '../components/loading/loading';
+@@ -1074,7 +1075,9 @@
+             try {
+                 const scenes = await apiClient.getJSON(apiClient.getUrl('SceneAnalysis/Search', { query: searchTerm, limit: 50 }));
+                 if (request !== sceneSearchRequest) return;
+-                searchStatus.textContent = scenes.length ? `${scenes.length}개 장면` : '일치하는 분석 완료 장면이 없습니다.';
++                searchStatus.textContent = scenes.length ?
++                    `${scenes.length}개 장면 · 표시된 시각은 태그가 감지된 프레임 위치입니다.` :
++                    '일치하는 분석 완료 장면이 없습니다.';
+                 const grid = document.createElement('div');
+                 grid.className = 'sceneAnalysisGrid';
+                 for (const scene of scenes) {
+@@ -1089,14 +1092,42 @@
+                     body.className = 'sceneAnalysisBody';
+                     const title = document.createElement('h3');
+                     title.textContent = scene.itemName;
++                    const position = document.createElement('div');
++                    position.className = 'sceneSearchPosition';
++                    const percent = getSceneSearchPosition(scene.timeTicks, scene.durationTicks);
++                    const sample = scene.sampleNumber && scene.sampleCount ?
++                        ` · 분석 프레임 ${scene.sampleNumber}/${scene.sampleCount}` : '';
++                    position.textContent = `감지 시각 ${formatSceneTime(scene.timeTicks)}`
++                        + (percent === null ? '' : ` / ${formatSceneTime(scene.durationTicks)} (${percent}%)`)
++                        + sample;
++                    const timeline = document.createElement('div');
++                    timeline.className = 'sceneSearchTimeline';
++                    if (percent !== null) {
++                        timeline.setAttribute('role', 'img');
++                        timeline.setAttribute('aria-label', `영상 전체 중 ${percent}% 위치`);
++                        const marker = document.createElement('span');
++                        marker.className = 'sceneSearchTimelineMarker';
++                        marker.style.left = `${percent}%`;
++                        timeline.appendChild(marker);
++                    } else {
++                        timeline.classList.add('hide');
++                    }
+                     const description = document.createElement('p');
+                     description.textContent = scene.description;
++                    const tags = document.createElement('div');
++                    tags.className = 'sceneAnalysisTags';
++                    tags.setAttribute('aria-label', '감지된 장면 태그');
++                    const matchedTerms = new Set((scene.matchedTerms || []).map(term => term.toLocaleLowerCase()));
++                    for (const tag of scene.tags || []) {
++                        const chip = document.createElement('span');
++                        chip.textContent = tag;
++                        if (matchedTerms.has(tag.toLocaleLowerCase())) chip.classList.add('sceneSearchTagMatch');
++                        tags.appendChild(chip);
++                    }
+                     const jump = document.createElement('button');
+                     jump.type = 'button';
+                     jump.className = 'sceneAnalysisJump button-flat';
+-                    const minutes = Math.floor(scene.timeTicks / 600000000);
+-                    const seconds = Math.floor(scene.timeTicks / 10000000) % 60;
+-                    jump.textContent = `약 ${minutes}:${String(seconds).padStart(2, '0')}부터 재생`;
++                    jump.textContent = `${formatSceneTime(scene.timeTicks)}에서 재생`;
+                     jump.addEventListener('click', async () => {
+                         const video = await apiClient.getItem(apiClient.getCurrentUserId(), scene.itemId);
+                         playbackManager.play({ items: [video], startPositionTicks: scene.timeTicks, sceneJump: true });
+@@ -1106,7 +1137,7 @@
+                     detail.className = 'button-flat';
+                     detail.textContent = '상세 보기';
+                     detail.addEventListener('click', () => appRouter.showItem(scene.itemId, params.serverId));
+-                    body.append(title, description, jump, detail);
++                    body.append(title, position, timeline, description, tags, jump, detail);
+                     card.append(image, body);
+                     grid.appendChild(card);
+                 }
+diff --git a/src/styles/sceneAnalysis.scss b/src/styles/sceneAnalysis.scss
+--- a/src/styles/sceneAnalysis.scss
++++ b/src/styles/sceneAnalysis.scss
+@@ -66,3 +66,32 @@
+     background: transparent;
+     color: inherit;
+ }
++
++.sceneSearchPosition {
++    font-size: .88em;
++    opacity: .85;
++}
++
++.sceneSearchTimeline {
++    position: relative;
++    height: .35em;
++    margin-top: .55em;
++    border-radius: 1em;
++    background: rgba(128, 128, 128, .4);
++}
++
++.sceneSearchTimelineMarker {
++    position: absolute;
++    top: 50%;
++    width: .9em;
++    height: .9em;
++    border: .16em solid currentColor;
++    border-radius: 50%;
++    background: #fff;
++    transform: translate(-50%, -50%);
++}
++
++.sceneAnalysisTags .sceneSearchTagMatch {
++    outline: .12em solid currentColor;
++    font-weight: 700;
++}
+diff --git a/src/scripts/sceneSearchPosition.js b/src/scripts/sceneSearchPosition.js
+new file mode 100644
+--- /dev/null
++++ b/src/scripts/sceneSearchPosition.js
+@@ -0,0 +1,15 @@
++export function formatSceneTime(ticks) {
++    const seconds = Math.floor(Math.max(0, Number(ticks) || 0) / 10000000);
++    const hours = Math.floor(seconds / 3600);
++    const minutes = Math.floor(seconds / 60) % 60;
++    const rest = seconds % 60;
++    const pad = value => String(value).padStart(2, '0');
++    return hours ? `${hours}:${pad(minutes)}:${pad(rest)}` : `${pad(minutes)}:${pad(rest)}`;
++}
++
++export function getSceneSearchPosition(timeTicks, durationTicks) {
++    const duration = Number(durationTicks);
++    if (!Number.isFinite(duration) || duration <= 0) return null;
++    const position = Math.max(0, Number(timeTicks) || 0);
++    return Math.round(Math.min(100, position / duration * 100) * 10) / 10;
++}

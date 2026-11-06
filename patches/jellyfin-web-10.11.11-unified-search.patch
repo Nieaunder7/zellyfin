@@ -1,0 +1,370 @@
+diff --git a/src/controllers/list.html b/src/controllers/list.html
+--- a/src/controllers/list.html
++++ b/src/controllers/list.html
+@@ -88,15 +88,6 @@
+             <button type="button" is="emby-button" class="inlineClearFilters button-flat">${ClearFilters}</button>
+         </div>
+         <div class="inlineFilterPanel hide padded-top padded-bottom" style="max-height:55vh;overflow-y:auto;"></div>
+-        <form class="sceneSearchForm padded-top padded-bottom" role="search">
+-            <label for="sceneSearchInput">장면 검색 · 모든 라이브러리</label>
+-            <div class="sceneSearchControls">
+-                <input id="sceneSearchInput" class="sceneSearchInput" type="search" placeholder="예: 침대 여성2명 잠든 (모두 포함)" autocomplete="off" />
+-                <button type="submit" is="emby-button" class="raised button-submit">검색</button>
+-            </div>
+-            <p class="sceneSearchStatus" role="status"></p>
+-            <div class="sceneSearchResults"></div>
+-        </form>
+         <div is="emby-itemscontainer" class="vertical-wrap itemsContainer centered">
+         </div>
+         <div class="flex align-items-center justify-content-center flex-wrap-wrap padded-top padded-left padded-right padded-bottom focuscontainer-x">
+diff --git a/src/controllers/list.js b/src/controllers/list.js
+--- a/src/controllers/list.js
++++ b/src/controllers/list.js
+@@ -2,13 +2,11 @@
+ import listView from '../components/listview/listview';
+ import * as userSettings from '../scripts/settings/userSettings';
+ import { getPageSize, setPageSize, PAGE_SIZE_CHANGE } from '../scripts/listPageSize';
+-import { formatSceneTime, getSceneSearchPosition } from '../scripts/sceneSearchPosition';
+ import focusManager from '../components/focusManager';
+ import cardBuilder from '../components/cardbuilder/cardBuilder';
+ import loading from '../components/loading/loading';
+ import AlphaNumericShortcuts from '../scripts/alphanumericshortcuts';
+ import { playbackManager } from '../components/playback/playbackmanager';
+-import { appRouter } from '../components/router/appRouter';
+ import AlphaPicker from '../components/alphaPicker/alphaPicker';
+ import { ServerConnections } from 'lib/jellyfin-apiclient';
+ import '../elements/emby-itemscontainer/emby-itemscontainer';
+@@ -1055,97 +1053,7 @@
+         const orderSelect = view.querySelector('.inlineOrder');
+         const pageSizeSelect = view.querySelector('.inlinePageSize');
+         const filterPanel = view.querySelector('.inlineFilterPanel');
+-        const sceneSearchForm = view.querySelector('.sceneSearchForm');
+         const moreFilters = view.querySelector('.inlineMoreFilters');
+-        let sceneSearchRequest = 0;
+-        sceneSearchForm.classList.toggle('hide', ['Recordings', 'Programs', 'nextup'].includes(params.type));
+-        sceneSearchForm.addEventListener('submit', async event => {
+-            event.preventDefault();
+-            const request = ++sceneSearchRequest;
+-            const searchTerm = sceneSearchForm.querySelector('.sceneSearchInput').value.trim();
+-            const searchStatus = sceneSearchForm.querySelector('.sceneSearchStatus');
+-            const results = sceneSearchForm.querySelector('.sceneSearchResults');
+-            results.replaceChildren();
+-            if (!searchTerm) {
+-                searchStatus.textContent = '';
+-                return;
+-            }
+-            searchStatus.textContent = '장면 색인을 검색하는 중…';
+-            const apiClient = ServerConnections.getApiClient(params.serverId);
+-            try {
+-                const scenes = await apiClient.getJSON(apiClient.getUrl('SceneAnalysis/Search', { query: searchTerm, limit: 50 }));
+-                if (request !== sceneSearchRequest) return;
+-                searchStatus.textContent = scenes.length ?
+-                    `${scenes.length}개 장면 · 표시된 시각은 태그가 감지된 프레임 위치입니다.` :
+-                    '일치하는 분석 완료 장면이 없습니다.';
+-                const grid = document.createElement('div');
+-                grid.className = 'sceneAnalysisGrid';
+-                for (const scene of scenes) {
+-                    const card = document.createElement('article');
+-                    card.className = 'sceneAnalysisCard';
+-                    const image = document.createElement('img');
+-                    image.className = 'sceneAnalysisImage';
+-                    image.loading = 'lazy';
+-                    image.alt = scene.description || '장면 미리보기';
+-                    image.src = apiClient.getUrl(scene.imageUrl, { ApiKey: apiClient.accessToken() });
+-                    const body = document.createElement('div');
+-                    body.className = 'sceneAnalysisBody';
+-                    const title = document.createElement('h3');
+-                    title.textContent = scene.itemName;
+-                    const position = document.createElement('div');
+-                    position.className = 'sceneSearchPosition';
+-                    const percent = getSceneSearchPosition(scene.timeTicks, scene.durationTicks);
+-                    const sample = scene.sampleNumber && scene.sampleCount ?
+-                        ` · 분석 프레임 ${scene.sampleNumber}/${scene.sampleCount}` : '';
+-                    position.textContent = `감지 시각 ${formatSceneTime(scene.timeTicks)}`
+-                        + (percent === null ? '' : ` / ${formatSceneTime(scene.durationTicks)} (${percent}%)`)
+-                        + sample;
+-                    const timeline = document.createElement('div');
+-                    timeline.className = 'sceneSearchTimeline';
+-                    if (percent !== null) {
+-                        timeline.setAttribute('role', 'img');
+-                        timeline.setAttribute('aria-label', `영상 전체 중 ${percent}% 위치`);
+-                        const marker = document.createElement('span');
+-                        marker.className = 'sceneSearchTimelineMarker';
+-                        marker.style.left = `${percent}%`;
+-                        timeline.appendChild(marker);
+-                    } else {
+-                        timeline.classList.add('hide');
+-                    }
+-                    const description = document.createElement('p');
+-                    description.textContent = scene.description;
+-                    const tags = document.createElement('div');
+-                    tags.className = 'sceneAnalysisTags';
+-                    tags.setAttribute('aria-label', '감지된 장면 태그');
+-                    const matchedTerms = new Set((scene.matchedTerms || []).map(term => term.toLocaleLowerCase()));
+-                    for (const tag of scene.tags || []) {
+-                        const chip = document.createElement('span');
+-                        chip.textContent = tag;
+-                        if (matchedTerms.has(tag.toLocaleLowerCase())) chip.classList.add('sceneSearchTagMatch');
+-                        tags.appendChild(chip);
+-                    }
+-                    const jump = document.createElement('button');
+-                    jump.type = 'button';
+-                    jump.className = 'sceneAnalysisJump button-flat';
+-                    jump.textContent = `${formatSceneTime(scene.timeTicks)}에서 재생`;
+-                    jump.addEventListener('click', async () => {
+-                        const video = await apiClient.getItem(apiClient.getCurrentUserId(), scene.itemId);
+-                        playbackManager.play({ items: [video], startPositionTicks: scene.timeTicks, sceneJump: true });
+-                    });
+-                    const detail = document.createElement('button');
+-                    detail.type = 'button';
+-                    detail.className = 'button-flat';
+-                    detail.textContent = '상세 보기';
+-                    detail.addEventListener('click', () => appRouter.showItem(scene.itemId, params.serverId));
+-                    body.append(title, position, timeline, description, tags, jump, detail);
+-                    card.append(image, body);
+-                    grid.appendChild(card);
+-                }
+-                results.appendChild(grid);
+-            } catch {
+-                if (request === sceneSearchRequest) searchStatus.textContent = '장면 검색을 불러올 수 없습니다.';
+-            }
+-        });
+         const refreshList = () => {
+             query.StartIndex = 0;
+             view.scrollTop = 0;
+diff --git a/src/apps/stable/features/search/components/SearchResults.tsx b/src/apps/stable/features/search/components/SearchResults.tsx
+--- a/src/apps/stable/features/search/components/SearchResults.tsx
++++ b/src/apps/stable/features/search/components/SearchResults.tsx
+@@ -1,7 +1,12 @@
+ import React, { type FC, useCallback, useEffect, useRef, useState } from 'react';
++import { useInfiniteQuery } from '@tanstack/react-query';
++import type { ApiClient } from 'jellyfin-apiclient';
+ import { useSearchItems } from '../api/useSearchItems';
++import { useApi } from 'hooks/useApi';
+ import globalize from 'lib/globalize';
+ import Loading from 'components/loading/LoadingComponent';
++import { appRouter } from 'components/router/appRouter';
++import { playbackManager } from 'components/playback/playbackmanager';
+ import SearchResultsRow from './SearchResultsRow';
+ import { CardShape } from 'utils/card';
+ import { CollectionType } from '@jellyfin/sdk/lib/generated-client/models/collection-type';
+@@ -9,6 +14,28 @@
+ import { Link } from 'react-router-dom';
+ import { mergeSearchPage } from '../utils/mergePages';
+ import { getPageSize, setPageSize, PAGE_SIZE_CHANGE } from 'scripts/listPageSize';
++import { formatSceneTime, getSceneSearchPosition } from 'scripts/sceneSearchPosition';
++import 'styles/sceneAnalysis.scss';
++
++interface UnifiedScene {
++    timeTicks: number;
++    description: string;
++    tags: string[];
++    imageUrl: string;
++}
++
++interface UnifiedVideo {
++    itemId: string;
++    itemName: string;
++    durationTicks: number;
++    matchedInName: boolean;
++    scenes: UnifiedScene[];
++}
++
++interface UnifiedPage {
++    totalRecordCount: number;
++    items: UnifiedVideo[];
++}
+ 
+ interface SearchResultsProps {
+     parentId?: string;
+@@ -22,16 +49,67 @@
+     return CardShape.Auto;
+ }
+ 
++const UnifiedSceneRow: FC<{ item: UnifiedVideo, scene: UnifiedScene, apiClient?: ApiClient }> = ({ item, scene, apiClient }) => {
++    const percent = getSceneSearchPosition(scene.timeTicks, item.durationTicks);
++    const play = useCallback(() => {
++        if (!apiClient) return;
++        void apiClient.getItem(apiClient.getCurrentUserId(), item.itemId)
++            .then(video => playbackManager.play({ items: [video], startPositionTicks: scene.timeTicks, sceneJump: true }))
++            .catch(error => console.error('[UnifiedSearch] Scene playback failed', error));
++    }, [apiClient, item.itemId, scene.timeTicks]);
++    return <div className='unifiedSearchScene'>
++        <button type='button' className='button-flat sceneAnalysisJump' onClick={play}>
++            {formatSceneTime(scene.timeTicks)}에서 재생{percent === null ? '' : ` · ${percent}%`}
++        </button>
++        <p>{scene.description}</p>
++    </div>;
++};
++
++const UnifiedVideoCard: FC<{ item: UnifiedVideo, apiClient?: ApiClient, serverId?: string }> = ({ item, apiClient, serverId }) => {
++    const showDetails = useCallback(() => appRouter.showItem(item.itemId, serverId), [item.itemId, serverId]);
++    return <article className='sceneAnalysisCard'>
++        {item.scenes[0] && <img className='sceneAnalysisImage' loading='lazy'
++            src={apiClient?.getUrl(item.scenes[0].imageUrl, { ApiKey: apiClient.accessToken() })}
++            alt={item.scenes[0].description || '장면 미리보기'} />}
++        <div className='sceneAnalysisBody'>
++            <h3><button type='button' className='button-flat unifiedSearchTitle' onClick={showDetails}>{item.itemName}</button></h3>
++            <p className='unifiedSearchMatch'>{item.matchedInName ? '파일명 일치' : '장면 일치'}
++                {item.matchedInName && item.scenes.length > 0 ? ' · 장면도 일치' : ''}</p>
++            {item.scenes.map(scene => <UnifiedSceneRow key={scene.timeTicks} item={item} scene={scene} apiClient={apiClient} />)}
++        </div>
++    </article>;
++};
++
+ const PagedSearchResults: FC<SearchResultsProps> = ({ parentId, collectionType, query }) => {
++    const { __legacyApiClient__: apiClient, user } = useApi();
+     const [pageSize, setCurrentPageSize] = useState(getPageSize);
+     const [startIndex, setStartIndex] = useState(0);
+     const [sections, setSections] = useState<Section[]>([]);
+     const [hasMore, setHasMore] = useState(true);
+     const { data, isPending, isFetching, isError, refetch } = useSearchItems(parentId, collectionType, query?.trim(), startIndex, pageSize);
+     const sentinel = useRef<HTMLButtonElement>(null);
++    const unifiedSentinel = useRef<HTMLButtonElement>(null);
+     const lastPage = useRef(-1);
+     const currentSections = useRef<Section[]>([]);
+     const loadingNext = useRef(false);
++    const unified = useInfiniteQuery({
++        queryKey: ['UnifiedVideoSearch', user?.ServerId, parentId, query?.trim(), pageSize],
++        initialPageParam: 0,
++        queryFn: async ({ pageParam }) => await apiClient!.getJSON(apiClient!.getUrl('SceneAnalysis/UnifiedSearch', {
++            query: query?.trim(), parentId, startIndex: pageParam, limit: pageSize
++        })) as UnifiedPage,
++        getNextPageParam: (page, pages) => {
++            const fetched = pages.reduce((count, entry) => count + entry.items.length, 0);
++            return fetched < page.totalRecordCount ? fetched : undefined;
++        },
++        enabled: !!apiClient && !!query?.trim()
++    });
++    const unifiedItems = unified.data?.pages.flatMap(page => page.items) || [];
++    const unifiedAvailable = !!unified.data && !unified.isError;
++    const visibleSections = unifiedAvailable ? sections.map(section => ({
++        ...section,
++        items: section.items.filter(item => item.MediaType !== 'Video')
++    })).filter(section => section.items.length > 0) : sections;
+ 
+     useEffect(() => {
+         const onPageSizeChange = () => {
+@@ -74,6 +152,23 @@
+         return () => observer.disconnect();
+     }, [hasMore, isFetching, isError, loadMore, sections]);
+ 
++    const fetchNextUnifiedPage = unified.fetchNextPage;
++    const hasNextUnifiedPage = unified.hasNextPage;
++    const isFetchingNextUnifiedPage = unified.isFetchingNextPage;
++    useEffect(() => {
++        const target = unifiedSentinel.current;
++        if (!target || !hasNextUnifiedPage || isFetchingNextUnifiedPage) return;
++        const observer = new IntersectionObserver(entries => {
++            if (entries.some(entry => entry.isIntersecting)) void fetchNextUnifiedPage();
++        }, { rootMargin: '400px 0px' });
++        observer.observe(target);
++        return () => observer.disconnect();
++    }, [hasNextUnifiedPage, isFetchingNextUnifiedPage, fetchNextUnifiedPage, unifiedItems.length]);
++
++    const loadMoreUnified = useCallback(() => {
++        void fetchNextUnifiedPage();
++    }, [fetchNextUnifiedPage]);
++
+     const handleMore = useCallback(() => {
+         if (isError) void refetch();
+         else loadMore();
+@@ -82,8 +177,8 @@
+         setPageSize(Number(event.target.value));
+     }, []);
+ 
+-    if (isPending && !sections.length) return <Loading />;
+-    if (!sections.length && !hasMore && !isError) {
++    if (isPending && !sections.length && unified.isPending) return <Loading />;
++    if (!visibleSections.length && !unifiedItems.length && !hasMore && !isError && !unified.isPending) {
+         return <div className='noItemsMessage centerMessage'>
+             {globalize.translate('SearchResultsEmpty', query)}
+             {collectionType && <div><Link className='emby-button' to={`/search?query=${encodeURIComponent(query || '')}`}>
+@@ -98,7 +193,20 @@
+                 {[50, 100, 200].map(size => <option key={size} value={size}>{size}</option>)}
+             </select>
+         </label>
+-        {sections.map(section => <SearchResultsRow
++        {unifiedAvailable && unifiedItems.length > 0 && <section className='unifiedSearchSection padded-left padded-right'>
++            <h2 className='sectionTitle'>영상 및 장면 <span className='unifiedSearchCount'>({unified.data?.pages[0].totalRecordCount})</span></h2>
++            <div className='sceneAnalysisGrid'>
++                {unifiedItems.map(item => <UnifiedVideoCard key={item.itemId} item={item}
++                    apiClient={apiClient} serverId={user?.ServerId || undefined} />)}
++            </div>
++            {unified.hasNextPage && <button ref={unifiedSentinel} type='button' className='emby-button raised'
++                disabled={unified.isFetchingNextPage} onClick={loadMoreUnified}>
++                {globalize.translate('ButtonMore')}
++            </button>}
++        </section>}
++        {unified.isPending && <p className='padded-left'>영상과 장면을 검색하는 중…</p>}
++        {unified.isError && <p className='padded-left'>장면 검색을 불러오지 못했습니다. 파일 검색 결과를 표시합니다.</p>}
++        {visibleSections.map(section => <SearchResultsRow
+             key={section.title}
+             title={globalize.translate(section.title)}
+             items={section.items}
+@@ -109,7 +217,7 @@
+                 allowBottomPadding: true
+             }}
+         />)}
+-        {(hasMore || isError) && <button
++        {(hasMore || isError) && (!unifiedAvailable || visibleSections.length > 0) && <button
+             ref={sentinel}
+             type='button'
+             className='emby-button raised'
+diff --git a/src/apps/stable/features/search/components/SearchFields.tsx b/src/apps/stable/features/search/components/SearchFields.tsx
+--- a/src/apps/stable/features/search/components/SearchFields.tsx
++++ b/src/apps/stable/features/search/components/SearchFields.tsx
+@@ -1,7 +1,6 @@
+ import React, { type ChangeEvent, type FC, useCallback, useRef } from 'react';
+ import AlphaPicker from 'components/alphaPicker/AlphaPickerComponent';
+ import Input from 'elements/emby-input/Input';
+-import globalize from 'lib/globalize';
+ import layoutManager from 'components/layoutManager';
+ import browser from 'scripts/browser';
+ import 'material-design-icons-iconfont';
+@@ -48,9 +47,9 @@
+                         className='searchfields-txtSearch'
+                         type='text'
+                         data-keyboard='true'
+-                        placeholder={globalize.translate('Search')}
++                        placeholder='파일명 또는 장면 설명 검색'
+                         autoComplete='off'
+-                        maxLength={40}
++                        maxLength={120}
+                         // eslint-disable-next-line jsx-a11y/no-autofocus
+                         autoFocus
+                         value={query}
+diff --git a/src/styles/sceneAnalysis.scss b/src/styles/sceneAnalysis.scss
+--- a/src/styles/sceneAnalysis.scss
++++ b/src/styles/sceneAnalysis.scss
+@@ -95,3 +95,30 @@
+     outline: .12em solid currentColor;
+     font-weight: 700;
+ }
++
++.unifiedSearchSection {
++    margin: 1em 0 2em;
++}
++
++.unifiedSearchCount,
++.unifiedSearchMatch {
++    opacity: .7;
++    font-size: .85em;
++}
++
++.unifiedSearchTitle {
++    padding: 0;
++    color: inherit;
++    text-align: left;
++    font: inherit;
++    cursor: pointer;
++}
++
++.unifiedSearchScene + .unifiedSearchScene {
++    border-top: 1px solid rgba(128, 128, 128, .3);
++}
++
++.unifiedSearchScene p {
++    margin-top: 0;
++    font-size: .9em;
++}

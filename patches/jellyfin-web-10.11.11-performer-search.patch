@@ -1,0 +1,71 @@
+diff --git a/src/apps/stable/features/search/components/SearchResults.tsx b/src/apps/stable/features/search/components/SearchResults.tsx
+--- a/src/apps/stable/features/search/components/SearchResults.tsx
++++ b/src/apps/stable/features/search/components/SearchResults.tsx
+@@ -29,12 +29,19 @@
+     itemName: string;
+     durationTicks: number;
+     matchedInName: boolean;
++    matchedPerformerCode?: string | null;
++    performerSource?: string | null;
+     scenes: UnifiedScene[];
+ }
+ 
+ interface UnifiedPage {
+     totalRecordCount: number;
+     items: UnifiedVideo[];
++    performerSummary?: {
++        name: string;
++        catalogCodeCount: number;
++        ownedVideoCount: number;
++    } | null;
+ }
+ 
+ interface SearchResultsProps {
+@@ -67,14 +74,21 @@
+ 
+ const UnifiedVideoCard: FC<{ item: UnifiedVideo, apiClient?: ApiClient, serverId?: string }> = ({ item, apiClient, serverId }) => {
+     const showDetails = useCallback(() => appRouter.showItem(item.itemId, serverId), [item.itemId, serverId]);
++    let matchLabel = item.matchedInName ? '파일명 일치' : '장면 일치';
++    if (item.matchedPerformerCode) {
++        matchLabel = `${item.performerSource || '출연작 목록'} 품번 ${item.matchedPerformerCode} 일치`;
++    }
+     return <article className='sceneAnalysisCard'>
+         {item.scenes[0] && <img className='sceneAnalysisImage' loading='lazy'
+             src={apiClient?.getUrl(item.scenes[0].imageUrl, { ApiKey: apiClient.accessToken() })}
+             alt={item.scenes[0].description || '장면 미리보기'} />}
+         <div className='sceneAnalysisBody'>
+             <h3><button type='button' className='button-flat unifiedSearchTitle' onClick={showDetails}>{item.itemName}</button></h3>
+-            <p className='unifiedSearchMatch'>{item.matchedInName ? '파일명 일치' : '장면 일치'}
+-                {item.matchedInName && item.scenes.length > 0 ? ' · 장면도 일치' : ''}</p>
++            <p className='unifiedSearchMatch'>
++                {matchLabel}
++                {item.matchedPerformerCode && item.matchedInName ? ' · 파일명도 일치' : ''}
++                {(item.matchedPerformerCode || item.matchedInName) && item.scenes.length > 0 ? ' · 장면도 일치' : ''}
++            </p>
+             {item.scenes.map(scene => <UnifiedSceneRow key={scene.timeTicks} item={item} scene={scene} apiClient={apiClient} />)}
+         </div>
+     </article>;
+@@ -195,6 +209,11 @@
+         </label>
+         {unifiedAvailable && unifiedItems.length > 0 && <section className='unifiedSearchSection padded-left padded-right'>
+             <h2 className='sectionTitle'>영상 및 장면 <span className='unifiedSearchCount'>({unified.data?.pages[0].totalRecordCount})</span></h2>
++            {unified.data?.pages[0].performerSummary && <p className='unifiedSearchMatch'>
++                저장된 {unified.data.pages[0].performerSummary.name} 출연작 품번
++                {' '}{unified.data.pages[0].performerSummary.catalogCodeCount}개 중
++                {' '}현재 라이브러리와 일치하는 영상 {unified.data.pages[0].performerSummary.ownedVideoCount}개
++            </p>}
+             <div className='sceneAnalysisGrid'>
+                 {unifiedItems.map(item => <UnifiedVideoCard key={item.itemId} item={item}
+                     apiClient={apiClient} serverId={user?.ServerId || undefined} />)}
+diff --git a/src/apps/stable/features/search/components/SearchFields.tsx b/src/apps/stable/features/search/components/SearchFields.tsx
+--- a/src/apps/stable/features/search/components/SearchFields.tsx
++++ b/src/apps/stable/features/search/components/SearchFields.tsx
+@@ -47,7 +47,7 @@
+                         className='searchfields-txtSearch'
+                         type='text'
+                         data-keyboard='true'
+-                        placeholder='파일명 또는 장면 설명 검색'
++                        placeholder='파일명·장면·배우 이름 검색'
+                         autoComplete='off'
+                         maxLength={120}
+                         // eslint-disable-next-line jsx-a11y/no-autofocus

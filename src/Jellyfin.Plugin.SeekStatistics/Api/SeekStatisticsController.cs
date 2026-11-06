@@ -22,17 +22,20 @@ public sealed class SeekStatisticsController : ControllerBase
     private readonly ILibraryManager _libraryManager;
     private readonly IUserManager _userManager;
     private readonly IDtoService _dtoService;
+    private readonly SceneAnalysisIndex _sceneIndex;
 
     public SeekStatisticsController(
         SeekRepository repository,
         ILibraryManager libraryManager,
         IUserManager userManager,
-        IDtoService dtoService)
+        IDtoService dtoService,
+        SceneAnalysisIndex sceneIndex)
     {
         _repository = repository;
         _libraryManager = libraryManager;
         _userManager = userManager;
         _dtoService = dtoService;
+        _sceneIndex = sceneIndex;
     }
 
     [HttpGet("Summary")]
@@ -63,7 +66,9 @@ public sealed class SeekStatisticsController : ControllerBase
         [FromQuery] string? nameLessThan = null,
         [FromQuery] string? videoTypes = null,
         [FromQuery] string? genreIds = null,
-        [FromQuery] string sortOrder = "Descending")
+        [FromQuery] string sortOrder = "Descending",
+        [FromQuery] string sortBy = "SeekCount",
+        [FromQuery] bool analysisCompleteOnly = false)
     {
         var userClaim = User.Claims.FirstOrDefault(claim =>
             claim.Type.Equals("Jellyfin-UserId", StringComparison.OrdinalIgnoreCase))?.Value;
@@ -130,71 +135,39 @@ public sealed class SeekStatisticsController : ControllerBase
             GroupByPresentationUniqueKey = false
         };
 
-        var filterValues = ParseEnumList<ItemFilter>(filters);
-        var summaries = _repository.GetSummary(0, 100000);
-        var counts = summaries
-            .Select(summary => (Summary: summary, Parsed: Guid.TryParse(summary.ItemId, out var id), Id: id))
-            .Where(entry => entry.Parsed)
-            .ToDictionary(entry => entry.Id, entry => entry.Summary.SeekCount);
-        var soughtIds = counts.Keys.ToArray();
+        var customSort = sortBy is "SeekCount" or "FileSize";
+        var standardSort = ParseEnumList<ItemSortBy>(sortBy);
+        if (!customSort && standardSort.Length == 0) return BadRequest("Unsupported sort field.");
 
-        var soughtItems = soughtIds
-            .Select(_libraryManager.GetItemById)
-            .Where(item => item is not null
-                && item.IsVisible(user)
-                && (!parentId.HasValue || item.GetAncestorIds().Contains(parent.Id))
-                && (requestedItemTypes.Length == 0 || requestedItemTypes.Contains(item.GetBaseItemKind())))
-            .Select(item => item!)
-            .OrderBy(item => item, Comparer<BaseItem>.Create((left, right) =>
-                {
-                    var countComparison = counts.GetValueOrDefault(left.Id).CompareTo(counts.GetValueOrDefault(right.Id));
-                    if (countComparison != 0)
-                    {
-                        return descending ? -countComparison : countComparison;
-                    }
-
-                    return string.Compare(left.SortName, right.SortName, StringComparison.CurrentCultureIgnoreCase);
-                }))
+        var query = CreateQuery();
+        ApplyFilters(query, ParseEnumList<ItemFilter>(filters));
+        // Filter and authorize the entire candidate set before sorting or paging.
+        // Sizes come from the index: never probe media files during a sort request.
+        var candidates = folder.GetItems(query).Items
+            .Where(item => !analysisCompleteOnly || _sceneIndex.IsComplete(item))
             .ToArray();
-
-        var zeroQuery = CreateQuery();
-        zeroQuery.ExcludeItemIds = soughtIds;
-        zeroQuery.OrderBy = new[] { (ItemSortBy.SortName, SortOrder.Ascending) };
-        ApplyFilters(zeroQuery, filterValues);
-
-        var page = new List<BaseItem>(limit);
-        QueryResult<BaseItem> zeroResult;
-
-        if (descending)
+        if (!customSort)
         {
-            var soughtStart = Math.Min(startIndex, soughtItems.Length);
-            page.AddRange(soughtItems.Skip(soughtStart).Take(limit));
-            var zeroStart = Math.Max(0, startIndex - soughtItems.Length);
-            zeroQuery.StartIndex = zeroStart;
-            zeroQuery.Limit = Math.Max(1, limit - page.Count);
-            zeroResult = folder.GetItems(zeroQuery);
-            if (page.Count < limit)
-            {
-                page.AddRange(zeroResult.Items.Take(limit - page.Count));
-            }
+            var standardOrdered = _libraryManager.Sort(candidates, user, standardSort,
+                descending ? SortOrder.Descending : SortOrder.Ascending);
+            return new QueryResult<BaseItemDto>(startIndex, candidates.Length,
+                _dtoService.GetBaseItemDtos(standardOrdered.Skip(startIndex).Take(limit).ToArray(), dtoOptions, user));
         }
-        else
-        {
-            zeroQuery.StartIndex = startIndex;
-            zeroQuery.Limit = limit;
-            zeroResult = folder.GetItems(zeroQuery);
-            page.AddRange(zeroResult.Items);
-            if (page.Count < limit)
-            {
-                var soughtStart = Math.Max(0, startIndex - zeroResult.TotalRecordCount);
-                page.AddRange(soughtItems.Skip(soughtStart).Take(limit - page.Count));
-            }
-        }
-
+        var counts = sortBy == "SeekCount"
+            ? _repository.GetSummary(0, 100000)
+                .Where(summary => Guid.TryParse(summary.ItemId, out _))
+                .ToDictionary(summary => Guid.Parse(summary.ItemId), summary => (long)summary.SeekCount)
+            : new Dictionary<Guid, long>();
+        var ordered = candidates
+            .OrderBy(item => sortBy == "FileSize" && (item.IsFolder || !item.Size.HasValue) ? 1 : 0)
+            .ThenBy(item => sortBy == "FileSize" ? item.Size.GetValueOrDefault() : counts.GetValueOrDefault(item.Id),
+                descending ? Comparer<long>.Create((a, b) => b.CompareTo(a)) : Comparer<long>.Default)
+            .ThenBy(item => item.SortName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(item => item.Id);
         return new QueryResult<BaseItemDto>(
             startIndex,
-            zeroResult.TotalRecordCount + soughtItems.Length,
-            _dtoService.GetBaseItemDtos(page, dtoOptions, user));
+            candidates.Length,
+            _dtoService.GetBaseItemDtos(ordered.Skip(startIndex).Take(limit).ToArray(), dtoOptions, user));
     }
 
     private static T[] ParseEnumList<T>(string? value)

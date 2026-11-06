@@ -1,0 +1,274 @@
+diff --git a/src/controllers/list.html b/src/controllers/list.html
+index 9546b03..463d987 100644
+--- a/src/controllers/list.html
++++ b/src/controllers/list.html
+@@ -29,6 +29,17 @@
+                 <span class="material-icons add" aria-hidden="true"></span>
+             </button>
+ 
++            <div class="homeVideosViewMode hide flex align-items-center">
++                <button is="emby-button" class="btnHomeVideosFolders button-flat" title="${Folders}" aria-pressed="false">
++                    <span class="material-icons folder" aria-hidden="true"></span>
++                    <span>${Folders}</span>
++                </button>
++                <button is="emby-button" class="btnHomeVideosAll button-flat" title="${All} ${HeaderVideos}" aria-pressed="false">
++                    <span class="material-icons video_library" aria-hidden="true"></span>
++                    <span>${All} ${HeaderVideos}</span>
++                </button>
++            </div>
++
+             <button is="emby-button" class="btnSort hide button-flat listTextButton-autohide">
+                 <span class="btnSortText"></span>
+                 <span class="material-icons btnSortIcon arrow_upward" aria-hidden="true"></span>
+diff --git a/src/controllers/list.js b/src/controllers/list.js
+--- a/src/controllers/list.js
++++ b/src/controllers/list.js
+@@ -16,11 +16,17 @@ import { stopMultiSelect } from 'components/multiSelect/multiSelect';
+ 
+ const SEEK_COUNT_SORT = 'SeekCount';
+ const PLAYBACK_QUERY_PAGE_LIMIT = 500;
++const HOME_VIDEOS_VIEW_MODE_FOLDERS = 'folders';
++const HOME_VIDEOS_VIEW_MODE_VIDEOS = 'videos';
+ 
+-function isRecursiveHomeVideosList(item) {
++function isHomeVideosRoot(item) {
+     return item?.Type === 'CollectionFolder' && item.CollectionType === CollectionType.Homevideos;
+ }
+ 
++function isRecursiveHomeVideosList(instance, item) {
++    return isHomeVideosRoot(item) && instance.homeVideosViewMode === HOME_VIDEOS_VIEW_MODE_VIDEOS;
++}
++
+ async function getAllListItems(instance, params, item) {
+     const items = [];
+     const seenIds = new Set();
+@@ -28,6 +34,6 @@ async function getAllListItems(instance, params, item) {
+     let startIndex = 0;
+ 
+     while (true) {
+-        const result = await getItems(instance, params, item, null, startIndex, PLAYBACK_QUERY_PAGE_LIMIT);
++        const result = await getItems(instance, params, item, null, startIndex, PLAYBACK_QUERY_PAGE_LIMIT, true);
+         const page = result.Items || result;
+         let addedCount = 0;
+@@ -300,12 +306,19 @@ function updateAlphaPickerState(instance) {
+     }
+ }
+ 
+-function getItems(instance, params, item, sortBy, startIndex, limit) {
++function getItems(instance, params, item, sortBy, startIndex, limit, forceRecursiveHomeVideos = false) {
+     const apiClient = ServerConnections.getApiClient(params.serverId);
++    const requestedSort = sortBy || instance.getSortValues().sortBy;
++    const recursiveHomeVideos = isHomeVideosRoot(item)
++        && (forceRecursiveHomeVideos || isRecursiveHomeVideosList(instance, item));
+ 
+-    if ((sortBy || instance.getSortValues().sortBy) === SEEK_COUNT_SORT) {
++    if (requestedSort === SEEK_COUNT_SORT && recursiveHomeVideos) {
+         return getSeekCountItems(instance, params, item, startIndex, limit);
+     }
+ 
++    if (requestedSort === SEEK_COUNT_SORT && isHomeVideosRoot(item)) {
++        sortBy = `${ItemSortBy.IsFolder},${ItemSortBy.SortName}`;
++    }
++
+     instance.queryRecursive = false;
+     if (params.type === 'Recordings') {
+@@ -400,7 +414,7 @@ function getItems(instance, params, item, sortBy, startIndex, limit) {
+         SortBy: sortBy
+     };
+ 
+-    if (item.Type === 'CollectionFolder' && item.CollectionType === CollectionType.Homevideos) {
++    if (recursiveHomeVideos) {
+         instance.queryRecursive = true;
+         query.IncludeItemTypes = 'Video';
+         query.Recursive = true;
+@@ -526,6 +540,45 @@ class ItemsView {
+         let totalRecordCount = 0;
+         let infiniteScrollObserver;
+ 
++        function getHomeVideosViewModeKey(item) {
++            return `homevideos-${params.serverId}-${item.Id}-viewMode`;
++        }
++
++        function updateHomeVideosViewModeButtons() {
++            const folderMode = self.homeVideosViewMode === HOME_VIDEOS_VIEW_MODE_FOLDERS;
++            for (const button of view.querySelectorAll('.btnHomeVideosFolders')) {
++                button.classList.toggle('button-submit', folderMode);
++                button.setAttribute('aria-pressed', folderMode.toString());
++            }
++
++            for (const button of view.querySelectorAll('.btnHomeVideosAll')) {
++                button.classList.toggle('button-submit', !folderMode);
++                button.setAttribute('aria-pressed', (!folderMode).toString());
++            }
++        }
++
++        function setHomeVideosViewMode(mode, refresh = true) {
++            if (!isHomeVideosRoot(self.currentItem)
++                || ![HOME_VIDEOS_VIEW_MODE_FOLDERS, HOME_VIDEOS_VIEW_MODE_VIDEOS].includes(mode)) {
++                return;
++            }
++
++            self.homeVideosViewMode = mode;
++            userSettings.set(getHomeVideosViewModeKey(self.currentItem), mode);
++            updateHomeVideosViewModeButtons();
++
++            if (!refresh) {
++                return;
++            }
++
++            query.StartIndex = 0;
++            loadedItems = [];
++            totalRecordCount = 0;
++            disconnectInfiniteScrollObserver();
++            loading.show();
++            self.itemsContainer.refreshItems().finally(() => loading.hide());
++        }
++
+         function disconnectInfiniteScrollObserver() {
+             if (infiniteScrollObserver) {
+                 infiniteScrollObserver.disconnect();
+@@ -832,6 +886,6 @@ class ItemsView {
+         async function play() {
+             const currentItem = self.currentItem;
+ 
+-            if (isRecursiveHomeVideosList(currentItem)) {
++            if (isHomeVideosRoot(currentItem)) {
+                 const items = await getAllListItems(self, self.params, currentItem);
+                 return playbackManager.play({
+@@ -861,6 +915,6 @@ class ItemsView {
+         async function queue() {
+             const currentItem = self.currentItem;
+ 
+-            if (isRecursiveHomeVideosList(currentItem)) {
++            if (isHomeVideosRoot(currentItem)) {
+                 const items = await getAllListItems(self, self.params, currentItem);
+                 return playbackManager.queue({ items });
+@@ -880,6 +934,6 @@ class ItemsView {
+         async function shuffle() {
+             const currentItem = self.currentItem;
+ 
+-            if (isRecursiveHomeVideosList(currentItem)) {
++            if (isHomeVideosRoot(currentItem)) {
+                 const items = shuffleItems(await getAllListItems(self, self.params, currentItem));
+                 return playbackManager.play({
+@@ -904,4 +958,5 @@ class ItemsView {
+         const self = this;
+         self.params = params;
++        self.homeVideosViewMode = HOME_VIDEOS_VIEW_MODE_FOLDERS;
+         this.itemsContainer = view.querySelector('.itemsContainer');
+ 
+@@ -946,5 +1001,7 @@ class ItemsView {
+         this.btnSortText = view.querySelector('.btnSortText');
+         this.btnSortIcon = view.querySelector('.btnSortIcon');
+         bindAll(view.querySelectorAll('.btnNewItem'), 'click', onNewItemClick.bind(this));
++        bindAll(view.querySelectorAll('.btnHomeVideosFolders'), 'click', () => setHomeVideosViewMode(HOME_VIDEOS_VIEW_MODE_FOLDERS));
++        bindAll(view.querySelectorAll('.btnHomeVideosAll'), 'click', () => setHomeVideosViewMode(HOME_VIDEOS_VIEW_MODE_VIDEOS));
+         this.alphaPickerElement = view.querySelector('.alphaPicker');
+         self.itemsContainer.fetchData = fetchData;
+@@ -968,5 +1025,17 @@ class ItemsView {
+                 }
+ 
+                 self.currentItem = item;
++                if (isHomeVideosRoot(item)) {
++                    const savedMode = userSettings.get(getHomeVideosViewModeKey(item));
++                    self.homeVideosViewMode = savedMode === HOME_VIDEOS_VIEW_MODE_VIDEOS ?
++                        HOME_VIDEOS_VIEW_MODE_VIDEOS :
++                        HOME_VIDEOS_VIEW_MODE_FOLDERS;
++                    hideOrShowAll(view.querySelectorAll('.homeVideosViewMode'), false);
++                    updateHomeVideosViewModeButtons();
++                } else {
++                    self.homeVideosViewMode = HOME_VIDEOS_VIEW_MODE_FOLDERS;
++                    hideOrShowAll(view.querySelectorAll('.homeVideosViewMode'), true);
++                }
++
+                 const refresh = !isRestored;
+                 self.itemsContainer.resume({
+diff --git a/src/controllers/playback/video/index.html b/src/controllers/playback/video/index.html
+index 57b1109..6d7756e 100644
+--- a/src/controllers/playback/video/index.html
++++ b/src/controllers/playback/video/index.html
+@@ -70,6 +70,10 @@
+                     <span class="xlargePaperIconButton material-icons favorite" aria-hidden="true"></span>
+                 </button>
+ 
++                <button is="paper-icon-button-light" class="btnAddToCollection hide autoSize" title="${AddToCollection}" aria-label="${AddToCollection}">
++                    <span class="xlargePaperIconButton material-icons library_add" aria-hidden="true"></span>
++                </button>
++
+                 <button is="paper-icon-button-light" class="btnSubtitles hide autoSize" title="${Subtitles}">
+                     <span class="xlargePaperIconButton material-icons closed_caption" aria-hidden="true"></span>
+                 </button>
+diff --git a/src/controllers/playback/video/index.js b/src/controllers/playback/video/index.js
+index e3f3d37..2a5872b 100644
+--- a/src/controllers/playback/video/index.js
++++ b/src/controllers/playback/video/index.js
+@@ -84,10 +84,31 @@ export default function (view) {
+         });
+     }
+ 
++    function updateCollectionButton(item) {
++        const button = view.querySelector('.btnAddToCollection');
++        button.classList.add('hide');
++
++        if (!item || !itemHelper.supportsAddingToCollection(item)) {
++            return;
++        }
++
++        const itemId = item.Id;
++        const apiClient = ServerConnections.getApiClient(item.ServerId);
++        apiClient.getCurrentUser().then(function (user) {
++            if (currentItem?.Id === itemId
++                && (user.Policy.IsAdministrator || user.Policy.EnableCollectionManagement)) {
++                button.classList.remove('hide');
++            }
++        }).catch(error => {
++            console.warn('[VideoPlayer] failed to check collection permissions', error);
++        });
++    }
++
+     function updateDisplayItem(itemInfo) {
+         const item = itemInfo.originalItem;
+         currentItem = item;
+         const displayItem = itemInfo.displayItem || item;
+         updateRecordingButton(displayItem);
++        updateCollectionButton(item);
+         let parentName = displayItem.SeriesName || displayItem.Album;
+ 
+@@ -198,5 +219,6 @@ export default function (view) {
+             btnRewind.disabled = true;
+             view.querySelector('.btnSubtitles').classList.add('hide');
+             view.querySelector('.btnAudio').classList.add('hide');
++            view.querySelector('.btnAddToCollection').classList.add('hide');
+             view.querySelector('.osdTitle').innerHTML = '';
+             view.querySelector('.osdMediaInfo').innerHTML = '';
+@@ -983,6 +1005,23 @@ export default function (view) {
+         });
+     }
+ 
++    function onAddToCollectionClick() {
++        const item = currentItem;
++        if (!item || !itemHelper.supportsAddingToCollection(item)) {
++            return;
++        }
++
++        import('../../../components/collectionEditor/collectionEditor').then(({ default: CollectionEditor }) => {
++            const collectionEditor = new CollectionEditor();
++            return collectionEditor.show({
++                items: [item.Id],
++                serverId: item.ServerId
++            });
++        }).catch(() => {
++            // Closing the collection editor without submitting rejects by design.
++        }).finally(resetIdle);
++    }
++
+     function onSettingsOption(selectedOption) {
+         if (selectedOption === 'stats') {
+             toggleStats();
+@@ -1776,5 +1815,6 @@ export default function (view) {
+         playbackManager.toggleAirPlay(currentPlayer);
+     });
+     view.querySelector('.btnVideoOsdSettings').addEventListener('click', onSettingsButtonClick);
++    view.querySelector('.btnAddToCollection').addEventListener('click', onAddToCollectionClick);
+     view.addEventListener('viewhide', function () {
+         headerElement.classList.remove('hide');

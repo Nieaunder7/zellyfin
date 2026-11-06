@@ -1,0 +1,35 @@
+diff --git a/src/apps/stable/features/search/components/SearchResults.tsx b/src/apps/stable/features/search/components/SearchResults.tsx
+--- a/src/apps/stable/features/search/components/SearchResults.tsx
++++ b/src/apps/stable/features/search/components/SearchResults.tsx
+@@ -94,9 +94,13 @@ const UnifiedVideoCard: FC<{ item: UnifiedVideo, apiClient?: ApiClient, serverId?: string }> = ({ item, apiClient, serverId }) => {
+     if (item.matchedInMetadata) matchLabels.push(item.synopsis ? '시놉시스 일치' : '메타 정보 일치');
+     if (item.scenes.length > 0) matchLabels.push('장면 일치');
+     return <article className='sceneAnalysisCard'>
+-        {item.scenes[0] && <img className='sceneAnalysisImage' loading='lazy'
+-            src={apiClient?.getUrl(item.scenes[0].imageUrl, { ApiKey: apiClient.accessToken() })}
+-            alt={item.scenes[0].description || '장면 미리보기'} />}
++        {apiClient && <img className={item.scenes[0] ? 'sceneAnalysisImage' : 'sceneAnalysisImage sceneAnalysisCover'}
++            loading='lazy'
++            src={item.scenes[0]
++                ? apiClient.getUrl(item.scenes[0].imageUrl, { ApiKey: apiClient.accessToken() })
++                : apiClient.getScaledImageUrl(item.itemId, { type: 'Primary', maxWidth: 480, quality: 80 })}
++            alt={item.scenes[0]?.description || `${item.itemName} 대표 이미지`}
++            onError={event => { event.currentTarget.hidden = true; }} />}
+         <div className='sceneAnalysisBody'>
+             <h3><button type='button' className='button-flat unifiedSearchTitle' onClick={showDetails}>{item.itemName}</button></h3>
+             <p className='unifiedSearchMatch'>
+diff --git a/src/styles/sceneAnalysis.scss b/src/styles/sceneAnalysis.scss
+--- a/src/styles/sceneAnalysis.scss
++++ b/src/styles/sceneAnalysis.scss
+@@ -21,6 +21,11 @@
+     object-fit: cover;
+ }
+
++.sceneAnalysisCover {
++    object-fit: contain;
++    background: rgba(0, 0, 0, .35);
++}
++
+ .sceneAnalysisBody {
+     padding: .7em;
+ }

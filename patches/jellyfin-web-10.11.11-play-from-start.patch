@@ -1,0 +1,375 @@
+diff --git a/src/apps/experimental/features/details/components/buttons/PlayOrResumeButton.tsx b/src/apps/experimental/features/details/components/buttons/PlayOrResumeButton.tsx
+--- a/src/apps/experimental/features/details/components/buttons/PlayOrResumeButton.tsx
++++ b/src/apps/experimental/features/details/components/buttons/PlayOrResumeButton.tsx
+@@ -1,7 +1,6 @@
+ import React, { FC, useCallback, useMemo } from 'react';
+ import IconButton from '@mui/material/IconButton';
+ import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+-import ReplayIcon from '@mui/icons-material/Replay';
+ import { useQueryClient } from '@tanstack/react-query';
+ 
+ import { useApi } from 'hooks/useApi';
+@@ -22,7 +21,6 @@
+ 
+ const PlayOrResumeButton: FC<PlayOrResumeButtonProps> = ({
+     item,
+-    isResumable,
+     selectedMediaSourceId,
+     selectedAudioTrack,
+     selectedSubtitleTrack
+@@ -33,10 +31,6 @@
+     const playOptions = useMemo(() => {
+         if (itemHelper.supportsMediaSourceSelection(item)) {
+             return {
+-                startPositionTicks:
+-                    item.UserData && isResumable ?
+-                        item.UserData.PlaybackPositionTicks :
+-                        0,
+                 mediaSourceId: selectedMediaSourceId,
+                 audioStreamIndex: selectedAudioTrack || null,
+                 subtitleStreamIndex: selectedSubtitleTrack
+@@ -44,7 +38,6 @@
+         }
+     }, [
+         item,
+-        isResumable,
+         selectedMediaSourceId,
+         selectedAudioTrack,
+         selectedSubtitleTrack
+@@ -76,15 +69,11 @@
+     return (
+         <IconButton
+             className='button-flat btnPlayOrResume'
+-            data-action={isResumable ? 'resume' : 'play'}
+-            title={
+-                isResumable ?
+-                    globalize.translate('ButtonResume') :
+-                    globalize.translate('Play')
+-            }
++            data-action='play'
++            title={globalize.translate('Play')}
+             onClick={onPlayClick}
+         >
+-            {isResumable ? <ReplayIcon /> : <PlayArrowIcon />}
++            <PlayArrowIcon />
+         </IconButton>
+     );
+ };
+diff --git a/src/components/cardbuilder/cardBuilder.js b/src/components/cardbuilder/cardBuilder.js
+--- a/src/components/cardbuilder/cardBuilder.js
++++ b/src/components/cardbuilder/cardBuilder.js
+@@ -1155,7 +1155,7 @@
+     const btnCssClass = 'cardOverlayButton cardOverlayButton-hover itemAction paper-icon-button-light';
+ 
+     if (playbackManager.canPlay(item)) {
+-        html += `<button is="paper-icon-button-light" class="${btnCssClass} cardOverlayFab-primary" data-action="resume" title="${globalize.translate('Play')}"><span class="material-icons cardOverlayButtonIcon cardOverlayButtonIcon-hover play_arrow" aria-hidden="true"></span></button>`;
++        html += `<button is="paper-icon-button-light" class="${btnCssClass} cardOverlayFab-primary" data-action="play" title="${globalize.translate('Play')}"><span class="material-icons cardOverlayButtonIcon cardOverlayButtonIcon-hover play_arrow" aria-hidden="true"></span></button>`;
+     }
+ 
+     html += '<div class="cardOverlayButton-br flex">';
+diff --git a/src/components/itemContextMenu.js b/src/components/itemContextMenu.js
+--- a/src/components/itemContextMenu.js
++++ b/src/components/itemContextMenu.js
+@@ -51,7 +51,7 @@
+         if (options.play !== false) {
+             commands.push({
+                 name: globalize.translate('Play'),
+-                id: 'resume',
++                id: 'play',
+                 icon: 'play_arrow'
+             });
+         }
+@@ -542,19 +542,15 @@
+                 getResolveFunction(resolve, id)();
+                 break;
+             case 'play':
+-                play(item, false);
+-                getResolveFunction(resolve, id)();
+-                break;
+-            case 'resume':
++                play(item);
++                getResolveFunction(resolve, id)();
++                break;
++            case 'queue':
+                 play(item, true);
+                 getResolveFunction(resolve, id)();
+                 break;
+-            case 'queue':
+-                play(item, false, true);
+-                getResolveFunction(resolve, id)();
+-                break;
+             case 'queuenext':
+-                play(item, false, true, true);
++                play(item, true, true);
+                 getResolveFunction(resolve, id)();
+                 break;
+             case 'stopPlayback':
+@@ -676,7 +672,7 @@
+     });
+ }
+ 
+-function play(item, resume, queue, queueNext) {
++function play(item, queue, queueNext) {
+     let method = 'play';
+     if (queue) {
+         if (queueNext) {
+@@ -686,15 +682,9 @@
+         }
+     }
+ 
+-    let startPosition = 0;
+-    if (resume && item.UserData?.PlaybackPositionTicks) {
+-        startPosition = item.UserData.PlaybackPositionTicks;
+-    }
+-
+     if (item.Type === 'Program') {
+         playbackManager[method]({
+             ids: [item.ChannelId],
+-            startPositionTicks: startPosition,
+             serverId: item.ServerId
+         });
+     } else {
+@@ -703,7 +693,6 @@
+ 
+         playbackManager[method]({
+             items: [item],
+-            startPositionTicks: startPosition,
+             queryOptions: {
+                 SortBy: sortValues.sortBy,
+                 SortOrder: sortValues.sortOrder
+diff --git a/src/components/listview/List/ListImageContainer.tsx b/src/components/listview/List/ListImageContainer.tsx
+--- a/src/components/listview/List/ListImageContainer.tsx
++++ b/src/components/listview/List/ListImageContainer.tsx
+@@ -6,7 +6,6 @@
+ import layoutManager from '../../layoutManager';
+ import { getDefaultBackgroundClass } from '../../cardbuilder/cardBuilderUtils';
+ import {
+-    canResume,
+     getChannelImageUrl,
+     getImageUrl
+ } from './listHelper';
+@@ -63,7 +62,6 @@
+     const mediaSourceIndicator = getMediaSourceIndicator();
+     const playedIndicator = getPlayedIndicator();
+     const progressBar = getProgressBar();
+-    const playbackPositionTicks = item?.UserData?.PlaybackPositionTicks;
+ 
+     return (
+         <Box
+@@ -84,14 +82,8 @@
+             {playOnImageClick && (
+                 <PlayArrowIconButton
+                     className={btnCssClass}
+-                    action={
+-                        canResume(playbackPositionTicks) ? 'resume' : 'play'
+-                    }
+-                    title={
+-                        canResume(playbackPositionTicks) ?
+-                            'ButtonResume' :
+-                            'Play'
+-                    }
++                    action='play'
++                    title='Play'
+                 />
+             )}
+ 
+diff --git a/src/components/listview/listview.js b/src/components/listview/listview.js
+--- a/src/components/listview/listview.js
++++ b/src/components/listview/listview.js
+@@ -303,7 +303,7 @@
+             }
+ 
+             if (playOnImageClick) {
+-                html += `<button is="paper-icon-button-light" class="listItemImageButton itemAction" data-action="resume" title="${globalize.translate('Play')}"><span class="material-icons listItemImageButton-icon play_arrow" aria-hidden="true"></span></button>`;
++                html += `<button is="paper-icon-button-light" class="listItemImageButton itemAction" data-action="play" title="${globalize.translate('Play')}"><span class="material-icons listItemImageButton-icon play_arrow" aria-hidden="true"></span></button>`;
+             }
+ 
+             const progressHtml = indicators.getProgressBarHtml(item, {
+diff --git a/src/components/playback/playbackmanager.js b/src/components/playback/playbackmanager.js
+--- a/src/components/playback/playbackmanager.js
++++ b/src/components/playback/playbackmanager.js
+@@ -645,6 +645,8 @@
+ 
+ function normalizePlayOptions(playOptions) {
+     playOptions.fullscreen = playOptions.fullscreen !== false;
++    // Keep saved progress for display, but always start a new item at the beginning.
++    playOptions.startPositionTicks = 0;
+ }
+ 
+ function truncatePlayOptions(playOptions) {
+diff --git a/src/components/playmenu.js b/src/components/playmenu.js
+--- a/src/components/playmenu.js
++++ b/src/components/playmenu.js
+@@ -1,66 +1,12 @@
+-import actionsheet from './actionSheet/actionSheet';
+-import datetime from '../scripts/datetime';
+ import { playbackManager } from './playback/playbackmanager';
+-import globalize from '../lib/globalize';
+ 
+ export function show(options) {
+     const item = options.item;
+ 
+-    const resumePositionTicks = item.UserData ? item.UserData.PlaybackPositionTicks : null;
+-
+     const playableItemId = item.Type === 'Program' ? item.ChannelId : item.Id;
+-
+-    if (!resumePositionTicks || item.IsFolder) {
+-        playbackManager.play({
+-            ids: [playableItemId],
+-            serverId: item.ServerId
+-        });
+-        return;
+-    }
+-
+-    const menuItems = [];
+-
+-    menuItems.push({
+-        name: globalize.translate('ResumeAt', datetime.getDisplayRunningTime(resumePositionTicks)),
+-        id: 'resume'
+-    });
+-
+-    menuItems.push({
+-        name: globalize.translate('PlayFromBeginning'),
+-        id: 'play'
+-    });
+-
+-    actionsheet.show({
+-
+-        items: menuItems,
+-        positionTo: options.positionTo
+-
+-    }).then(function (id) {
+-        switch (id) {
+-            case 'play':
+-                playbackManager.play({
+-                    ids: [playableItemId],
+-                    serverId: item.ServerId
+-                });
+-                break;
+-            case 'resume':
+-                playbackManager.play({
+-                    ids: [playableItemId],
+-                    startPositionTicks: resumePositionTicks,
+-                    serverId: item.ServerId
+-                });
+-                break;
+-            case 'queue':
+-                playbackManager.queue({
+-                    items: [item]
+-                });
+-                break;
+-            case 'shuffle':
+-                playbackManager.shuffle(item);
+-                break;
+-            default:
+-                break;
+-        }
++    playbackManager.play({
++        ids: [playableItemId],
++        serverId: item.ServerId
+     });
+ }
+ 
+diff --git a/src/components/shortcuts.js b/src/components/shortcuts.js
+--- a/src/components/shortcuts.js
++++ b/src/components/shortcuts.js
+@@ -248,13 +248,11 @@
+             ServerId: serverId
+         });
+     } else if (action === 'play' || action === 'resume') {
+-        const startPositionTicks = parseInt(card.getAttribute('data-positionticks') || '0', 10);
+         const sortValues = userSettings.getSortValuesLegacy(sortParentId, 'SortName');
+ 
+         if (playbackManager.canPlay(item)) {
+             playbackManager.play({
+                 ids: [playableItemId],
+-                startPositionTicks: startPositionTicks,
+                 serverId: serverId,
+                 queryOptions: {
+                     SortBy: sortValues.sortBy,
+diff --git a/src/controllers/itemDetails/index.html b/src/controllers/itemDetails/index.html
+--- a/src/controllers/itemDetails/index.html
++++ b/src/controllers/itemDetails/index.html
+@@ -17,7 +17,7 @@
+                 </div>
+ 
+                 <div class="mainDetailButtons focuscontainer-x">
+-                    <button is="emby-button" type="button" class="button-flat btnPlay hide detailButton" title="${ButtonResume}" data-action="resume">
++                    <button is="emby-button" type="button" class="button-flat btnPlay hide detailButton" title="${Play}" data-action="play">
+                         <div class="detailButton-content">
+                             <span class="material-icons detailButton-icon play_arrow" aria-hidden="true"></span>
+                         </div>
+diff --git a/src/controllers/itemDetails/index.js b/src/controllers/itemDetails/index.js
+--- a/src/controllers/itemDetails/index.js
++++ b/src/controllers/itemDetails/index.js
+@@ -384,15 +384,10 @@
+         hideAll(page, 'btnShuffle', enableShuffle);
+         canPlay = true;
+ 
+-        const isResumable = item.UserData && item.UserData.PlaybackPositionTicks > 0;
+-        hideAll(page, 'btnReplay', isResumable);
++        hideAll(page, 'btnReplay');
+ 
+         for (const btnPlay of page.querySelectorAll('.btnPlay')) {
+-            if (isResumable) {
+-                btnPlay.title = globalize.translate('ButtonResume');
+-            } else {
+-                btnPlay.title = globalize.translate('Play');
+-            }
++            btnPlay.title = globalize.translate('Play');
+         }
+     } else {
+         hideAll(page, 'btnPlay');
+@@ -1993,18 +1988,17 @@
+         });
+     }
+ 
+-    function getPlayOptions(startPosition) {
++    function getPlayOptions() {
+         const audioStreamIndex = view.querySelector('.selectAudio').value || null;
+         return {
+-            startPositionTicks: startPosition,
+             mediaSourceId: view.querySelector('.selectSource').value,
+             audioStreamIndex: audioStreamIndex,
+             subtitleStreamIndex: view.querySelector('.selectSubtitles').value
+         };
+     }
+ 
+-    function playItem(item, startPosition) {
+-        const playOptions = getPlayOptions(startPosition);
++    function playItem(item) {
++        const playOptions = getPlayOptions();
+         playOptions.items = [item];
+         playbackManager.play(playOptions);
+     }
+@@ -2013,7 +2007,7 @@
+         playbackManager.playTrailers(currentItem);
+     }
+ 
+-    function playCurrentItem(button, mode) {
++    function playCurrentItem() {
+         const item = currentItem;
+ 
+         if (item.Type === 'Program') {
+@@ -2026,19 +2020,11 @@
+             return;
+         }
+ 
+-        playItem(item, item.UserData && mode === 'resume' ? item.UserData.PlaybackPositionTicks : 0);
++        playItem(item);
+     }
+ 
+     function onPlayClick() {
+-        let actionElem = this;
+-        let action = actionElem.getAttribute('data-action');
+-
+-        if (!action) {
+-            actionElem = actionElem.querySelector('[data-action]') || actionElem;
+-            action = actionElem.getAttribute('data-action');
+-        }
+-
+-        playCurrentItem(actionElem, action);
++        playCurrentItem();
+     }
+ 
+     function onInstantMixClick() {

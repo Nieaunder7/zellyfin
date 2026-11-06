@@ -1,0 +1,649 @@
+diff --git a/src/controllers/list.js b/src/controllers/list.js
+--- a/src/controllers/list.js
++++ b/src/controllers/list.js
+@@ -1,6 +1,7 @@
+ import globalize from '../lib/globalize';
+ import listView from '../components/listview/listview';
+ import * as userSettings from '../scripts/settings/userSettings';
++import { getPageSize, setPageSize, PAGE_SIZE_CHANGE } from '../scripts/listPageSize';
+ import focusManager from '../components/focusManager';
+ import cardBuilder from '../components/cardbuilder/cardBuilder';
+ import loading from '../components/loading/loading';
+@@ -14,6 +15,8 @@
+ import { CollectionType } from '@jellyfin/sdk/lib/generated-client/models/collection-type';
+ import { ItemSortBy } from '@jellyfin/sdk/lib/generated-client/models/item-sort-by';
+ import { stopMultiSelect } from 'components/multiSelect/multiSelect';
++import '../elements/emby-select/emby-select';
++import '../styles/inlineListControls.scss';
+ 
+ const SEEK_COUNT_SORT = 'SeekCount';
+ const FILE_SIZE_SORT = 'FileSize';
+@@ -165,6 +168,9 @@
+     let hasFilters;
+     const queryFilters = [];
+     const filters = instance.getFilters();
++    if (instance.params.IsFavorite === 'true' || filters.IsFavorite) query.IsFavorite = true;
++    else if (filters.IsNotFavorite) query.IsFavorite = false;
++    else query.IsFavorite = null;
+ 
+     if (filters.IsPlayed) {
+         queryFilters.push('IsPlayed');
+@@ -538,9 +544,7 @@
+             Limit: undefined
+         };
+ 
+-        if (userSettings.libraryPageSize() > 0) {
+-            query['Limit'] = userSettings.libraryPageSize();
+-        }
++        query.Limit = getPageSize();
+ 
+         let isLoading = false;
+         let loadedItems = [];
+@@ -634,7 +638,7 @@
+         function fetchData() {
+             const queryKey = JSON.stringify([
+                 self.getSortValues(), self.getFilters(), self.homeVideosViewMode,
+-                usesNameSort(self) ? self.alphaPicker?.value() : null
++                usesNameSort(self) ? self.alphaPicker?.value() : null, query.Limit
+             ]);
+             if (queryKey !== listQueryKey) {
+                 listQueryKey = queryKey;
+@@ -1023,6 +1027,103 @@
+ 
+         this.btnSortText = view.querySelector('.btnSortText');
+         this.btnSortIcon = view.querySelector('.btnSortIcon');
++        for (const button of [...filterButtons, ...sortButtons]) button.style.display = 'none';
++        const favoriteSelect = view.querySelector('.inlineFavorite');
++        const sortSelect = view.querySelector('.inlineSort');
++        const orderSelect = view.querySelector('.inlineOrder');
++        const pageSizeSelect = view.querySelector('.inlinePageSize');
++        const filterPanel = view.querySelector('.inlineFilterPanel');
++        const moreFilters = view.querySelector('.inlineMoreFilters');
++        const refreshList = () => {
++            query.StartIndex = 0;
++            view.scrollTop = 0;
++            self.itemsContainer.refreshItems();
++        };
++        const updateInline = () => {
++            const favorite = self.getFilters();
++            if (params.IsFavorite === 'true' || favorite.IsFavorite) favoriteSelect.value = 'yes';
++            else if (favorite.IsNotFavorite) favoriteSelect.value = 'no';
++            else favoriteSelect.value = 'all';
++            favoriteSelect.closest('label').classList.toggle('hide', params.IsFavorite === 'true' || params.type === 'nextup');
++            const sortOptions = params.type === 'nextup' ? [] : self.getSortMenuOptions();
++            sortSelect.replaceChildren(...sortOptions.map(option => {
++                const element = document.createElement('option');
++                element.value = option.value;
++                element.textContent = option.name;
++                return element;
++            }));
++            sortSelect.value = self.getSortValues().sortBy;
++            orderSelect.value = self.getSortValues().sortOrder;
++            const dateSort = sortSelect.value.startsWith(ItemSortBy.DateCreated);
++            const sizeSort = sortSelect.value === FILE_SIZE_SORT;
++            let ascendingLabel = 'Ascending';
++            let descendingLabel = 'Descending';
++            if (dateSort) {
++                ascendingLabel = 'OldestFirst';
++                descendingLabel = 'NewestFirst';
++            } else if (sizeSort) {
++                ascendingLabel = 'SmallestFirst';
++                descendingLabel = 'LargestFirst';
++            }
++            orderSelect.options[0].textContent = globalize.translate(ascendingLabel);
++            orderSelect.options[1].textContent = globalize.translate(descendingLabel);
++            sortSelect.closest('label').classList.toggle('hide', !sortOptions.length);
++            orderSelect.closest('label').classList.toggle('hide', !sortOptions.length);
++            pageSizeSelect.value = String(getPageSize());
++            moreFilters.classList.toggle('hide', !hasVisibleFilters);
++            view.querySelector('.inlineClearFilters').classList.toggle('hide', !hasVisibleFilters);
++        };
++        const mountFilters = async () => {
++            const { default: FilterMenu } = await import('../components/filtermenu/filtermenu');
++            new FilterMenu().mountInline(filterPanel, {
++                settingsKey: self.getSettingsKey(),
++                settings: self.getFilters(),
++                visibleSettings: self.getVisibleFilters().filter(value => value !== 'IsFavorite'),
++                onChange: refreshList,
++                parentId: params.parentId,
++                itemTypes: self.getItemTypes(),
++                serverId: params.serverId,
++                filterMenuOptions: self.getFilterMenuOptions()
++            });
++        };
++        favoriteSelect.addEventListener('change', () => {
++            const key = self.getSettingsKey();
++            userSettings.setFilter(`${key}-filter-IsFavorite`, favoriteSelect.value === 'yes' ? 'true' : null);
++            userSettings.setFilter(`${key}-filter-IsNotFavorite`, favoriteSelect.value === 'no' ? 'true' : null);
++            refreshList();
++        });
++        sortSelect.addEventListener('change', () => {
++            userSettings.setFilter(`${self.getSettingsKey()}-sortby`, sortSelect.value);
++            updateInline();
++            updateAlphaPickerState(self);
++            refreshList();
++        });
++        orderSelect.addEventListener('change', () => {
++            userSettings.setFilter(`${self.getSettingsKey()}-sortorder`, orderSelect.value);
++            refreshList();
++        });
++        pageSizeSelect.addEventListener('change', () => setPageSize(pageSizeSelect.value));
++        const onPageSizeChange = () => {
++            query.Limit = getPageSize();
++            pageSizeSelect.value = String(query.Limit);
++            refreshList();
++        };
++        document.addEventListener(PAGE_SIZE_CHANGE, onPageSizeChange);
++        moreFilters.addEventListener('click', () => {
++            const open = filterPanel.classList.toggle('hide') === false;
++            moreFilters.setAttribute('aria-expanded', String(open));
++            if (open) void mountFilters();
++        });
++        view.querySelector('.inlineClearFilters').addEventListener('click', () => {
++            for (const name of ['IsPlayed', 'IsUnplayed', 'IsFavorite', 'IsNotFavorite', 'IsResumable',
++                'Is4K', 'IsHD', 'IsSD', 'Is3D', 'VideoTypes', 'SeriesStatus', 'HasSubtitles',
++                'HasTrailer', 'HasSpecialFeature', 'HasThemeSong', 'HasThemeVideo', 'GenreIds']) {
++                userSettings.setFilter(`${self.getSettingsKey()}-filter-${name}`, null);
++            }
++            updateInline();
++            if (!filterPanel.classList.contains('hide')) void mountFilters();
++            refreshList();
++        });
+         bindAll(view.querySelectorAll('.btnNewItem'), 'click', onNewItemClick.bind(this));
+         bindAll(view.querySelectorAll('.btnHomeVideosFolders'), 'click', () => setHomeVideosViewMode(HOME_VIDEOS_VIEW_MODE_FOLDERS));
+         bindAll(view.querySelectorAll('.btnHomeVideosAll'), 'click', () => setHomeVideosViewMode(HOME_VIDEOS_VIEW_MODE_VIDEOS));
+@@ -1046,6 +1147,7 @@
+                 }
+ 
+                 self.currentItem = item;
++                updateInline();
+                 if (isHomeVideosRoot(item)) {
+                     const savedMode = userSettings.get(getHomeVideosViewModeKey(item));
+                     self.homeVideosViewMode = savedMode === HOME_VIDEOS_VIEW_MODE_VIDEOS ?
+@@ -1138,6 +1240,7 @@
+             }
+         });
+         view.addEventListener('viewdestroy', function () {
++            document.removeEventListener(PAGE_SIZE_CHANGE, onPageSizeChange);
+             disconnectInfiniteScrollObserver();
+             if (self.listController) {
+                 self.listController.destroy();
+@@ -1165,6 +1268,7 @@
+             IsPlayed: userSettings.getFilter(basekey + '-filter-IsPlayed') === 'true',
+             IsUnplayed: userSettings.getFilter(basekey + '-filter-IsUnplayed') === 'true',
+             IsFavorite: userSettings.getFilter(basekey + '-filter-IsFavorite') === 'true',
++            IsNotFavorite: userSettings.getFilter(basekey + '-filter-IsNotFavorite') === 'true',
+             IsResumable: userSettings.getFilter(basekey + '-filter-IsResumable') === 'true',
+             Is4K: userSettings.getFilter(basekey + '-filter-Is4K') === 'true',
+             IsHD: userSettings.getFilter(basekey + '-filter-IsHD') === 'true',
+diff --git a/src/controllers/list.html b/src/controllers/list.html
+--- a/src/controllers/list.html
++++ b/src/controllers/list.html
+@@ -60,6 +60,29 @@
+                 <span class="material-icons more_vert" aria-hidden="true"></span>
+             </button>
+         </div>
++        <div class="inlineListControls padded-top padded-bottom" style="display:flex;flex-wrap:wrap;gap:.75em;align-items:center;">
++            <label class="inlineFavoriteLabel">${Favorites}
++                <select is="emby-select" class="inlineFavorite" aria-label="${Favorites}">
++                    <option value="all">${All}</option><option value="yes">${Favorite}</option><option value="no">${NotFavorite}</option>
++                </select>
++            </label>
++            <label class="inlineSortLabel">${Sort}
++                <select is="emby-select" class="inlineSort" aria-label="${Sort}"></select>
++            </label>
++            <label class="inlineOrderLabel">${SortOrder}
++                <select is="emby-select" class="inlineOrder" aria-label="${SortOrder}">
++                    <option value="Ascending">${Ascending}</option><option value="Descending">${Descending}</option>
++                </select>
++            </label>
++            <label>${ItemsPerLoad}
++                <select is="emby-select" class="inlinePageSize" aria-label="${ItemsPerLoad}">
++                    <option value="50">50</option><option value="100">100</option><option value="200">200</option>
++                </select>
++            </label>
++            <button type="button" is="emby-button" class="inlineMoreFilters button-flat" aria-expanded="false">${Filters}</button>
++            <button type="button" is="emby-button" class="inlineClearFilters button-flat">${ClearFilters}</button>
++        </div>
++        <div class="inlineFilterPanel hide padded-top padded-bottom" style="max-height:55vh;overflow-y:auto;"></div>
+         <div is="emby-itemscontainer" class="vertical-wrap itemsContainer centered">
+         </div>
+         <div class="flex align-items-center justify-content-center flex-wrap-wrap padded-top padded-left padded-right padded-bottom focuscontainer-x">
+diff --git a/src/components/filtermenu/filtermenu.js b/src/components/filtermenu/filtermenu.js
+--- a/src/components/filtermenu/filtermenu.js
++++ b/src/components/filtermenu/filtermenu.js
+@@ -102,8 +102,9 @@
+             break;
+     }
+ }
+-function saveValues(context, settings, settingsKey) {
++function saveValues(context, settings, settingsKey, skipFavorite = false) {
+     context.querySelectorAll('.simpleFilter').forEach(elem => {
++        if (skipFavorite && elem.getAttribute('data-settingname') === 'IsFavorite') return;
+         if (elem.tagName === 'INPUT') {
+             setBasicFilter(context, settingsKey + '-filter-' + elem.getAttribute('data-settingname'), elem);
+         } else {
+@@ -139,7 +140,9 @@
+         }
+     });
+ 
+-    userSettings.setFilter(settingsKey + '-filter-GenreIds', genres.join(','));
++    if (!skipFavorite || !context.querySelector('.genreFilters').classList.contains('hide')) {
++        userSettings.setFilter(settingsKey + '-filter-GenreIds', genres.join(','));
++    }
+ }
+ function bindCheckboxInput(context, on) {
+     const elems = context.querySelectorAll('.checkboxList-verticalwrap');
+@@ -207,6 +210,26 @@
+     });
+ }
+ class FilterMenu {
++    mountInline(context, options) {
++        context.innerHTML = globalize.translateHtml(template, 'core');
++        const settingElements = context.querySelectorAll('.viewSetting');
++        for (const elem of settingElements) {
++            elem.classList.toggle('hide', elem.getAttribute('data-settingname') === 'IsFavorite'
++                || !options.visibleSettings.includes(elem.getAttribute('data-settingname')));
++        }
++        initEditor(context, options.settings);
++        loadDynamicFilters(context, options);
++        context.querySelector('form').addEventListener('change', event => {
++            if (event.target.checked && event.target.classList.contains('chkPlayed')) {
++                context.querySelector('.chkUnplayed').checked = false;
++            } else if (event.target.checked && event.target.classList.contains('chkUnplayed')) {
++                context.querySelector('.chkPlayed').checked = false;
++            }
++            saveValues(context, options.settings, options.settingsKey, true);
++            options.onChange();
++        });
++    }
++
+     show(options) {
+         return new Promise( (resolve) => {
+             const dialogOptions = {
+diff --git a/src/controllers/favorites.js b/src/controllers/favorites.js
+--- a/src/controllers/favorites.js
++++ b/src/controllers/favorites.js
+@@ -11,7 +11,9 @@
+ import { getBackdropShape, getPortraitShape, getSquareShape } from 'utils/card';
+ 
+ import 'elements/emby-itemscontainer/emby-itemscontainer';
++import 'elements/emby-select/emby-select';
+ import { createPagedItems } from '../scripts/pagedItems';
++import { getPageSize, setPageSize, PAGE_SIZE_CHANGE } from '../scripts/listPageSize';
+ 
+ function enableScrollX() {
+     return false;
+@@ -289,15 +291,20 @@
+         html += '</div>';
+     }
+ 
+-    elem.innerHTML = html;
++    elem.innerHTML = `<label class="padded-left padded-top">${globalize.translate('ItemsPerLoad')}
++        <select is="emby-select" class="favoritePageSize" aria-label="${globalize.translate('ItemsPerLoad')}">
++            <option value="50">50</option><option value="100">100</option><option value="200">200</option>
++        </select></label>` + html;
+     window.CustomElements.upgradeSubtree(elem);
++    elem.querySelector('.favoritePageSize').value = String(getPageSize());
++    elem.querySelector('.favoritePageSize').addEventListener('change', event => setPageSize(event.target.value));
+ 
+     const elems = elem.querySelectorAll('.itemsContainer');
+ 
+     for (let i = 0, length = elems.length; i < length; i++) {
+         const itemsContainer = elems[i];
+         const button = itemsContainer.parentElement.querySelector('.moreItems');
+-        const pager = createPagedItems(getFetchDataFn(sections[i]).bind(instance));
++        const pager = createPagedItems(getFetchDataFn(sections[i]).bind(instance), getPageSize());
+         let append = false;
+         const loadMore = () => {
+             if (itemsContainer.paused || pager.loading || !pager.hasMore) return;
+@@ -323,7 +330,7 @@
+                 throw error;
+             });
+         };
+-        instance.pagers.push({ observer, button, pager, loadMore });
++        instance.pagers.push({ observer, button, pager, loadMore, itemsContainer });
+         itemsContainer.getItemsHtml = getItemsHtmlFn(sections[i]).bind(instance);
+         itemsContainer.parentContainer = dom.parentWithClass(itemsContainer, 'verticalSection');
+     }
+@@ -336,17 +343,32 @@
+         this.apiClient = ServerConnections.currentApiClient();
+         this.sectionsContainer = view.querySelector('.sections');
+         this.pagers = [];
++        this.active = false;
++        this.pageSizeChanged = false;
+         createSections(this, this.sectionsContainer, this.apiClient);
++        this.onPageSizeChange = () => {
++            this.pagers.forEach(entry => {
++                entry.observer.disconnect();
++                entry.pager.reset(getPageSize());
++                entry.itemsContainer.innerHTML = '';
++                if (this.active) entry.itemsContainer.refreshItems();
++            });
++            this.sectionsContainer.querySelector('.favoritePageSize').value = String(getPageSize());
++            if (!this.active) this.pageSizeChanged = true;
++        };
++        document.addEventListener(PAGE_SIZE_CHANGE, this.onPageSizeChange);
+     }
+ 
+     onResume(options) {
++        this.active = true;
+         const promises = [];
+         const view = this.view;
+         const elems = this.sectionsContainer.querySelectorAll('.itemsContainer');
+ 
+         for (const elem of elems) {
+-            promises.push(elem.resume(options));
+-        }
++            promises.push(elem.resume(this.pageSizeChanged ? { ...options, refresh: true } : options));
++        }
++        this.pageSizeChanged = false;
+ 
+         Promise.all(promises).then(() => {
+             for (const entry of this.pagers) {
+@@ -359,6 +381,7 @@
+     }
+ 
+     onPause() {
++        this.active = false;
+         this.pagers.forEach(entry => {
+             entry.observer.disconnect();
+         });
+@@ -369,6 +392,7 @@
+     }
+ 
+     destroy() {
++        document.removeEventListener(PAGE_SIZE_CHANGE, this.onPageSizeChange);
+         this.pagers.forEach(entry => {
+             entry.observer.disconnect();
+             entry.button.removeEventListener('click', entry.loadMore);
+diff --git a/src/scripts/pagedItems.js b/src/scripts/pagedItems.js
+--- a/src/scripts/pagedItems.js
++++ b/src/scripts/pagedItems.js
+@@ -10,6 +10,14 @@
+     return {
+         get loading() { return loading; },
+         get hasMore() { return hasMore; },
++        reset(nextPageSize = pageSize) {
++            generation++;
++            pageSize = nextPageSize;
++            items = [];
++            offset = 0;
++            hasMore = true;
++            loading = false;
++        },
+         dispose() {
+             disposed = true;
+             generation++;
+diff --git a/src/apps/stable/features/search/components/SearchResults.tsx b/src/apps/stable/features/search/components/SearchResults.tsx
+--- a/src/apps/stable/features/search/components/SearchResults.tsx
++++ b/src/apps/stable/features/search/components/SearchResults.tsx
+@@ -8,6 +8,7 @@
+ import { Section } from '../types';
+ import { Link } from 'react-router-dom';
+ import { mergeSearchPage } from '../utils/mergePages';
++import { getPageSize, setPageSize, PAGE_SIZE_CHANGE } from 'scripts/listPageSize';
+ 
+ interface SearchResultsProps {
+     parentId?: string;
+@@ -22,14 +23,29 @@
+ }
+ 
+ const PagedSearchResults: FC<SearchResultsProps> = ({ parentId, collectionType, query }) => {
++    const [pageSize, setCurrentPageSize] = useState(getPageSize);
+     const [startIndex, setStartIndex] = useState(0);
+     const [sections, setSections] = useState<Section[]>([]);
+     const [hasMore, setHasMore] = useState(true);
+-    const { data, isPending, isFetching, isError, refetch } = useSearchItems(parentId, collectionType, query?.trim(), startIndex);
++    const { data, isPending, isFetching, isError, refetch } = useSearchItems(parentId, collectionType, query?.trim(), startIndex, pageSize);
+     const sentinel = useRef<HTMLButtonElement>(null);
+     const lastPage = useRef(-1);
+     const currentSections = useRef<Section[]>([]);
+     const loadingNext = useRef(false);
++
++    useEffect(() => {
++        const onPageSizeChange = () => {
++            setCurrentPageSize(getPageSize());
++            setStartIndex(0);
++            setSections([]);
++            setHasMore(true);
++            currentSections.current = [];
++            lastPage.current = -1;
++            loadingNext.current = false;
++        };
++        document.addEventListener(PAGE_SIZE_CHANGE, onPageSizeChange);
++        return () => document.removeEventListener(PAGE_SIZE_CHANGE, onPageSizeChange);
++    }, []);
+ 
+     useEffect(() => {
+         if (!data || lastPage.current === startIndex) return;
+@@ -37,16 +53,16 @@
+         lastPage.current = startIndex;
+         currentSections.current = merged.sections;
+         setSections(merged.sections);
+-        setHasMore(merged.added > 0 && data.reduce((total, section) => total + section.items.length, 0) >= 100);
++        setHasMore(merged.added > 0 && data.reduce((total, section) => total + section.items.length, 0) >= pageSize);
+         loadingNext.current = false;
+-    }, [data, startIndex]);
++    }, [data, startIndex, pageSize]);
+ 
+     const loadMore = useCallback(() => {
+         if (hasMore && !isFetching && !isError && !loadingNext.current && lastPage.current === startIndex) {
+             loadingNext.current = true;
+-            setStartIndex(index => index + 100);
++            setStartIndex(index => index + pageSize);
+         }
+-    }, [hasMore, isFetching, isError, startIndex]);
++    }, [hasMore, isFetching, isError, startIndex, pageSize]);
+ 
+     useEffect(() => {
+         const target = sentinel.current;
+@@ -62,6 +78,9 @@
+         if (isError) void refetch();
+         else loadMore();
+     }, [isError, refetch, loadMore]);
++    const onPageSizeSelect = useCallback((event: React.ChangeEvent<HTMLSelectElement>) => {
++        setPageSize(Number(event.target.value));
++    }, []);
+ 
+     if (isPending && !sections.length) return <Loading />;
+     if (!sections.length && !hasMore && !isError) {
+@@ -73,6 +92,12 @@
+         </div>;
+     }
+     return <div className='searchResults padded-top padded-bottom-page'>
++        <label className='padded-left'>{globalize.translate('ItemsPerLoad')}
++            <select className='emby-select' aria-label={globalize.translate('ItemsPerLoad')} value={pageSize}
++                onChange={onPageSizeSelect}>
++                {[50, 100, 200].map(size => <option key={size} value={size}>{size}</option>)}
++            </select>
++        </label>
+         {sections.map(section => <SearchResultsRow
+             key={section.title}
+             title={globalize.translate(section.title)}
+@@ -96,7 +121,7 @@
+ 
+ // Remount all page state when the search scope changes; old requests are cancelled.
+ const SearchResults: FC<SearchResultsProps> = props => <PagedSearchResults
+-    key={JSON.stringify([props.parentId, props.collectionType, props.query?.trim()])}
++    key={JSON.stringify([props.parentId, props.collectionType, props.query?.trim(), getPageSize()])}
+     {...props}
+ />;
+ export default SearchResults;
+diff --git a/src/apps/stable/features/search/api/useSearchItems.ts b/src/apps/stable/features/search/api/useSearchItems.ts
+--- a/src/apps/stable/features/search/api/useSearchItems.ts
++++ b/src/apps/stable/features/search/api/useSearchItems.ts
+@@ -16,17 +16,18 @@
+     parentId?: string,
+     collectionType?: CollectionType,
+     searchTerm?: string,
+-    startIndex = 0
++    startIndex = 0,
++    pageSize = 100
+ ) => {
+     const { api, user } = useApi();
+     const userId = user?.Id;
+     return useQuery({
+-        queryKey: ['Search', 'PagedItems', api?.basePath, userId, collectionType, parentId, searchTerm, startIndex],
++        queryKey: ['Search', 'PagedItems', api?.basePath, userId, collectionType, parentId, searchTerm, startIndex, pageSize],
+         queryFn: async ({ signal }) => {
+             if (collectionType && isLivetv(collectionType)) {
+-                return sortSections(await fetchLiveTv(api!, userId!, searchTerm, signal, startIndex, parentId));
++                return sortSections(await fetchLiveTv(api!, userId!, searchTerm, signal, startIndex, parentId, pageSize));
+             }
+-            const params = { parentId, searchTerm, startIndex, limit: 100 };
++            const params = { parentId, searchTerm, startIndex, limit: pageSize };
+             const options = { signal };
+             const types = getItemTypesFromCollectionType(collectionType);
+             const [artists, people, videos, programs, searchData] = await Promise.all([
+diff --git a/src/apps/stable/features/search/api/useLiveTvSearch.ts b/src/apps/stable/features/search/api/useLiveTvSearch.ts
+--- a/src/apps/stable/features/search/api/useLiveTvSearch.ts
++++ b/src/apps/stable/features/search/api/useLiveTvSearch.ts
+@@ -9,7 +9,7 @@
+ import { Section } from '../types';
+ import { fetchItemsByType } from './fetchItemsByType';
+ 
+-export const fetchLiveTv = (api: Api, userId: string | undefined, searchTerm: string | undefined, signal: AbortSignal, startIndex = 0, parentId?: string) => {
++export const fetchLiveTv = (api: Api, userId: string | undefined, searchTerm: string | undefined, signal: AbortSignal, startIndex = 0, parentId?: string, pageSize = 100) => {
+     const sections: Section[] = [];
+ 
+     // Movies row
+@@ -21,6 +21,7 @@
+             isMovie: true,
+             searchTerm,
+             startIndex,
++            limit: pageSize,
+             parentId
+         },
+         { signal }
+@@ -44,6 +45,7 @@
+             isNews: false,
+             searchTerm,
+             startIndex,
++            limit: pageSize,
+             parentId
+         },
+         { signal }
+@@ -62,6 +64,7 @@
+             isSports: true,
+             searchTerm,
+             startIndex,
++            limit: pageSize,
+             parentId
+         },
+         { signal }
+@@ -80,6 +83,7 @@
+             isKids: true,
+             searchTerm,
+             startIndex,
++            limit: pageSize,
+             parentId
+         },
+         { signal }
+@@ -98,6 +102,7 @@
+             isNews: true,
+             searchTerm,
+             startIndex,
++            limit: pageSize,
+             parentId
+         },
+         { signal }
+@@ -120,6 +125,7 @@
+             isNews: false,
+             searchTerm,
+             startIndex,
++            limit: pageSize,
+             parentId
+         },
+         { signal }
+@@ -137,6 +143,7 @@
+             includeItemTypes: [ BaseItemKind.TvChannel ],
+             searchTerm,
+             startIndex,
++            limit: pageSize,
+             parentId
+         },
+         { signal }
+diff --git a/src/strings/en-us.json b/src/strings/en-us.json
+--- a/src/strings/en-us.json
++++ b/src/strings/en-us.json
+@@ -1874,5 +1874,13 @@
+     "LogLoadFailure": "Failed to load the log file. It may still be actively written to.",
+     "DeletePlayingFile": "Delete playing file",
+     "ConfirmDeletePlayingFile": "Permanently delete this file from storage and the library? Playback will stop after confirmation. After successful deletion, the next queued item will play; if there is none, the player will close. Associated subtitles and artwork may also be removed.",
+-    "ErrorDeletingPlayingFile": "The delete-and-play-next action could not be completed. Check the file and permissions before trying again."
++    "ErrorDeletingPlayingFile": "The delete-and-play-next action could not be completed. Check the file and permissions before trying again.",
++    "NotFavorite": "Not a favorite",
++    "SortOrder": "Order",
++    "ItemsPerLoad": "Items per load",
++    "ClearFilters": "Clear filters",
++    "OldestFirst": "Oldest first",
++    "NewestFirst": "Newest first",
++    "SmallestFirst": "Smallest first",
++    "LargestFirst": "Largest first"
+ }
+diff --git a/src/strings/ko.json b/src/strings/ko.json
+--- a/src/strings/ko.json
++++ b/src/strings/ko.json
+@@ -1995,5 +1995,13 @@
+     "Retry": "재시도",
+     "DeletePlayingFile": "재생 중인 파일 삭제",
+     "ConfirmDeletePlayingFile": "이 파일을 저장장치와 라이브러리에서 영구 삭제하시겠습니까? 승인하면 재생을 중단하고 삭제합니다. 삭제가 완료되면 재생목록의 다음 항목을 재생하며, 다음 항목이 없으면 플레이어를 닫습니다. 연결된 자막과 이미지도 삭제될 수 있습니다.",
+-    "ErrorDeletingPlayingFile": "파일 삭제 후 다음 재생 작업을 완료하지 못했습니다. 파일 상태와 삭제 권한을 확인해 주세요."
++    "ErrorDeletingPlayingFile": "파일 삭제 후 다음 재생 작업을 완료하지 못했습니다. 파일 상태와 삭제 권한을 확인해 주세요.",
++    "NotFavorite": "즐겨찾기 아님",
++    "SortOrder": "순서",
++    "ItemsPerLoad": "한 번에 불러오기",
++    "ClearFilters": "필터 초기화",
++    "OldestFirst": "오래된 순",
++    "NewestFirst": "최신 순",
++    "SmallestFirst": "작은 순",
++    "LargestFirst": "큰 순"
+ }
+diff --git a/src/scripts/listPageSize.js b/src/scripts/listPageSize.js
+new file mode 100644
+--- /dev/null
++++ b/src/scripts/listPageSize.js
+@@ -0,0 +1,24 @@
++import * as userSettings from './settings/userSettings';
++import { ServerConnections } from 'lib/jellyfin-apiclient';
++
++export const PAGE_SIZES = [50, 100, 200];
++export const PAGE_SIZE_CHANGE = 'zellyfin-page-size-change';
++
++function key() {
++    return `zellyfin-page-size-${ServerConnections.currentApiClient()?.serverId() || 'default'}`;
++}
++
++export function getPageSize() {
++    const saved = Number(userSettings.get(key(), false));
++    const legacy = userSettings.libraryPageSize();
++    if (PAGE_SIZES.includes(saved)) return saved;
++    if (PAGE_SIZES.includes(legacy)) return legacy;
++    return 100;
++}
++
++export function setPageSize(size) {
++    const next = Number(size);
++    if (!PAGE_SIZES.includes(next) || next === getPageSize()) return;
++    userSettings.set(key(), String(next), false);
++    document.dispatchEvent(new CustomEvent(PAGE_SIZE_CHANGE));
++}
+diff --git a/src/styles/inlineListControls.scss b/src/styles/inlineListControls.scss
+new file mode 100644
+--- /dev/null
++++ b/src/styles/inlineListControls.scss
+@@ -0,0 +1,13 @@
++.inlineListControls {
++    label { display: flex; flex-direction: column; gap: .2em; }
++    select { min-width: 8.5em; }
++}
++
++.inlineFilterPanel {
++    .formDialogContent, .dialogContentInner { padding: 0; margin: 0; width: 100%; max-width: none; }
++    form { margin: 0 !important; }
++    .verticalSection { margin: .6em 0 !important; padding: 0 !important; }
++    .checkboxList { display: flex; flex-wrap: wrap; gap: .5em 1.2em; }
++    .checkboxList label { min-width: 9em; margin: 0; }
++    .checkboxListLabel { font-size: 1em; margin: .35em 0; }
++}

@@ -28,3 +28,11 @@
 .vscode/
 Thumbs.db
 Desktop.ini
+
+# Local handoff notes, scratch data, and Python test caches.
+/HANDOFF.md
+/.temp/
+/docs/metadata-tag-search-design.md
+/.pytest_cache/
+**/__pycache__/
+*.pyc

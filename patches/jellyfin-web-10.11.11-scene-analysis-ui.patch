@@ -1,0 +1,511 @@
+diff --git a/src/controllers/list.html b/src/controllers/list.html
+--- a/src/controllers/list.html
++++ b/src/controllers/list.html
+@@ -66,6 +66,11 @@
+                     <option value="all">${All}</option><option value="yes">${Favorite}</option><option value="no">${NotFavorite}</option>
+                 </select>
+             </label>
++            <label class="inlineAnalysisLabel">장면 분석
++                <select is="emby-select" class="inlineAnalysis" aria-label="장면 분석">
++                    <option value="all">전체</option><option value="complete">분석 완료만</option>
++                </select>
++            </label>
+             <label class="inlineSortLabel">${Sort}
+                 <select is="emby-select" class="inlineSort" aria-label="${Sort}"></select>
+             </label>
+@@ -83,6 +88,15 @@
+             <button type="button" is="emby-button" class="inlineClearFilters button-flat">${ClearFilters}</button>
+         </div>
+         <div class="inlineFilterPanel hide padded-top padded-bottom" style="max-height:55vh;overflow-y:auto;"></div>
++        <form class="sceneSearchForm padded-top padded-bottom" role="search">
++            <label for="sceneSearchInput">장면 검색 · 모든 라이브러리</label>
++            <div class="sceneSearchControls">
++                <input id="sceneSearchInput" class="sceneSearchInput" type="search" placeholder="예: 침대 여성2명 잠든 (모두 포함)" autocomplete="off" />
++                <button type="submit" is="emby-button" class="raised button-submit">검색</button>
++            </div>
++            <p class="sceneSearchStatus" role="status"></p>
++            <div class="sceneSearchResults"></div>
++        </form>
+         <div is="emby-itemscontainer" class="vertical-wrap itemsContainer centered">
+         </div>
+         <div class="flex align-items-center justify-content-center flex-wrap-wrap padded-top padded-left padded-right padded-bottom focuscontainer-x">
+diff --git a/src/controllers/list.js b/src/controllers/list.js
+--- a/src/controllers/list.js
++++ b/src/controllers/list.js
+@@ -7,6 +7,7 @@
+ import loading from '../components/loading/loading';
+ import AlphaNumericShortcuts from '../scripts/alphanumericshortcuts';
+ import { playbackManager } from '../components/playback/playbackmanager';
++import { appRouter } from '../components/router/appRouter';
+ import AlphaPicker from '../components/alphaPicker/alphaPicker';
+ import { ServerConnections } from 'lib/jellyfin-apiclient';
+ import '../elements/emby-itemscontainer/emby-itemscontainer';
+@@ -17,6 +18,7 @@
+ import { stopMultiSelect } from 'components/multiSelect/multiSelect';
+ import '../elements/emby-select/emby-select';
+ import '../styles/inlineListControls.scss';
++import '../styles/sceneAnalysis.scss';
+ 
+ const SEEK_COUNT_SORT = 'SeekCount';
+ const FILE_SIZE_SORT = 'FileSize';
+@@ -92,7 +94,8 @@
+         Recursive: recursiveHomeVideos || !item || item.Type === 'BoxSet',
+         IsFavorite: params.IsFavorite === 'true' || null,
+         SortBy: sortValues.sortBy,
+-        SortOrder: sortValues.sortOrder
++        SortOrder: sortValues.sortOrder,
++        AnalysisCompleteOnly: instance.getFilters().AnalysisCompleteOnly
+     });
+ 
+     return apiClient.getJSON(apiClient.getUrl('SeekStatistics/Items', query));
+@@ -328,6 +331,21 @@
+     if (requestedSort === SEEK_COUNT_SORT || requestedSort === FILE_SIZE_SORT) {
+         instance.queryRecursive = recursiveHomeVideos || !item || item.Type === 'BoxSet';
+         return getSeekCountItems(instance, params, item, startIndex, limit, recursiveHomeVideos);
++    }
++
++    if (instance.getFilters().AnalysisCompleteOnly && !['Recordings', 'Programs', 'nextup'].includes(params.type)) {
++        instance.queryRecursive = recursiveHomeVideos || !item || item.Type === 'BoxSet';
++        const query = modifyQueryWithFilters(instance, {
++            StartIndex: startIndex,
++            Limit: limit,
++            ParentId: item ? item.Id : params.parentId,
++            IncludeItemTypes: recursiveHomeVideos ? 'Video' : (params.type || null),
++            Recursive: instance.queryRecursive,
++            SortBy: requestedSort,
++            SortOrder: instance.getSortValues().sortOrder,
++            AnalysisCompleteOnly: true
++        });
++        return apiClient.getJSON(apiClient.getUrl('SeekStatistics/Items', query));
+     }
+ 
+     instance.queryRecursive = false;
+@@ -1031,11 +1049,72 @@
+         this.btnSortIcon = view.querySelector('.btnSortIcon');
+         for (const button of [...filterButtons, ...sortButtons]) button.style.display = 'none';
+         const favoriteSelect = view.querySelector('.inlineFavorite');
++        const analysisSelect = view.querySelector('.inlineAnalysis');
+         const sortSelect = view.querySelector('.inlineSort');
+         const orderSelect = view.querySelector('.inlineOrder');
+         const pageSizeSelect = view.querySelector('.inlinePageSize');
+         const filterPanel = view.querySelector('.inlineFilterPanel');
++        const sceneSearchForm = view.querySelector('.sceneSearchForm');
+         const moreFilters = view.querySelector('.inlineMoreFilters');
++        let sceneSearchRequest = 0;
++        sceneSearchForm.classList.toggle('hide', ['Recordings', 'Programs', 'nextup'].includes(params.type));
++        sceneSearchForm.addEventListener('submit', async event => {
++            event.preventDefault();
++            const request = ++sceneSearchRequest;
++            const searchTerm = sceneSearchForm.querySelector('.sceneSearchInput').value.trim();
++            const searchStatus = sceneSearchForm.querySelector('.sceneSearchStatus');
++            const results = sceneSearchForm.querySelector('.sceneSearchResults');
++            results.replaceChildren();
++            if (!searchTerm) {
++                searchStatus.textContent = '';
++                return;
++            }
++            searchStatus.textContent = '장면 색인을 검색하는 중…';
++            const apiClient = ServerConnections.getApiClient(params.serverId);
++            try {
++                const scenes = await apiClient.getJSON(apiClient.getUrl('SceneAnalysis/Search', { query: searchTerm, limit: 50 }));
++                if (request !== sceneSearchRequest) return;
++                searchStatus.textContent = scenes.length ? `${scenes.length}개 장면` : '일치하는 분석 완료 장면이 없습니다.';
++                const grid = document.createElement('div');
++                grid.className = 'sceneAnalysisGrid';
++                for (const scene of scenes) {
++                    const card = document.createElement('article');
++                    card.className = 'sceneAnalysisCard';
++                    const image = document.createElement('img');
++                    image.className = 'sceneAnalysisImage';
++                    image.loading = 'lazy';
++                    image.alt = scene.description || '장면 미리보기';
++                    image.src = apiClient.getUrl(scene.imageUrl, { ApiKey: apiClient.accessToken() });
++                    const body = document.createElement('div');
++                    body.className = 'sceneAnalysisBody';
++                    const title = document.createElement('h3');
++                    title.textContent = scene.itemName;
++                    const description = document.createElement('p');
++                    description.textContent = scene.description;
++                    const jump = document.createElement('button');
++                    jump.type = 'button';
++                    jump.className = 'sceneAnalysisJump button-flat';
++                    const minutes = Math.floor(scene.timeTicks / 600000000);
++                    const seconds = Math.floor(scene.timeTicks / 10000000) % 60;
++                    jump.textContent = `약 ${minutes}:${String(seconds).padStart(2, '0')}부터 재생`;
++                    jump.addEventListener('click', async () => {
++                        const video = await apiClient.getItem(apiClient.getCurrentUserId(), scene.itemId);
++                        playbackManager.play({ items: [video], startPositionTicks: scene.timeTicks, sceneJump: true });
++                    });
++                    const detail = document.createElement('button');
++                    detail.type = 'button';
++                    detail.className = 'button-flat';
++                    detail.textContent = '상세 보기';
++                    detail.addEventListener('click', () => appRouter.showItem(scene.itemId, params.serverId));
++                    body.append(title, description, jump, detail);
++                    card.append(image, body);
++                    grid.appendChild(card);
++                }
++                results.appendChild(grid);
++            } catch {
++                if (request === sceneSearchRequest) searchStatus.textContent = '장면 검색을 불러올 수 없습니다.';
++            }
++        });
+         const refreshList = () => {
+             query.StartIndex = 0;
+             view.scrollTop = 0;
+@@ -1047,6 +1126,8 @@
+             else if (favorite.IsNotFavorite) favoriteSelect.value = 'no';
+             else favoriteSelect.value = 'all';
+             favoriteSelect.closest('label').classList.toggle('hide', params.IsFavorite === 'true' || params.type === 'nextup');
++            analysisSelect.value = favorite.AnalysisCompleteOnly ? 'complete' : 'all';
++            analysisSelect.closest('label').classList.toggle('hide', ['Recordings', 'Programs', 'nextup'].includes(params.type));
+             const sortOptions = params.type === 'nextup' ? [] : self.getSortMenuOptions();
+             sortSelect.replaceChildren(...sortOptions.map(option => {
+                 const element = document.createElement('option');
+@@ -1094,6 +1175,10 @@
+             userSettings.setFilter(`${key}-filter-IsNotFavorite`, favoriteSelect.value === 'no' ? 'true' : null);
+             refreshList();
+         });
++        analysisSelect.addEventListener('change', () => {
++            userSettings.setFilter(`${self.getSettingsKey()}-filter-AnalysisCompleteOnly`, analysisSelect.value === 'complete' ? 'true' : null);
++            refreshList();
++        });
+         sortSelect.addEventListener('change', () => {
+             userSettings.setFilter(`${self.getSettingsKey()}-sortby`, sortSelect.value);
+             updateInline();
+@@ -1117,7 +1202,7 @@
+             if (open) void mountFilters();
+         });
+         view.querySelector('.inlineClearFilters').addEventListener('click', () => {
+-            for (const name of ['IsPlayed', 'IsUnplayed', 'IsFavorite', 'IsNotFavorite', 'IsResumable',
++            for (const name of ['IsPlayed', 'IsUnplayed', 'IsFavorite', 'IsNotFavorite', 'IsResumable', 'AnalysisCompleteOnly',
+                 'Is4K', 'IsHD', 'IsSD', 'Is3D', 'VideoTypes', 'SeriesStatus', 'HasSubtitles',
+                 'HasTrailer', 'HasSpecialFeature', 'HasThemeSong', 'HasThemeVideo', 'GenreIds']) {
+                 userSettings.setFilter(`${self.getSettingsKey()}-filter-${name}`, null);
+@@ -1271,6 +1356,7 @@
+             IsUnplayed: userSettings.getFilter(basekey + '-filter-IsUnplayed') === 'true',
+             IsFavorite: userSettings.getFilter(basekey + '-filter-IsFavorite') === 'true',
+             IsNotFavorite: userSettings.getFilter(basekey + '-filter-IsNotFavorite') === 'true',
++            AnalysisCompleteOnly: userSettings.getFilter(basekey + '-filter-AnalysisCompleteOnly') === 'true',
+             IsResumable: userSettings.getFilter(basekey + '-filter-IsResumable') === 'true',
+             Is4K: userSettings.getFilter(basekey + '-filter-Is4K') === 'true',
+             IsHD: userSettings.getFilter(basekey + '-filter-IsHD') === 'true',
+diff --git a/src/controllers/itemDetails/index.html b/src/controllers/itemDetails/index.html
+--- a/src/controllers/itemDetails/index.html
++++ b/src/controllers/itemDetails/index.html
+@@ -11,6 +11,7 @@
+                 <div class="infoWrapper">
+                     <div class="detailImageContainer hide-desktop hide-tv"></div>
+                     <div class="nameContainer"></div>
++                    <div class="zellyfinTranslationStatus hide" role="status" style="display:inline-block;margin:.15rem 0 .45rem;padding:.25rem .55rem;border-radius:.35rem;font-size:.8rem;font-weight:700;"></div>
+                     <div class="itemMiscInfo itemMiscInfo-primary" style="margin-bottom: 0.6em;"></div>
+                     <div class="itemMiscInfo itemMiscInfo-secondary" style="margin-bottom: 0.6em;"></div>
+                 </div>
+@@ -121,6 +122,11 @@
+                         <div class="overview-controls">
+                             <a class="overview-expand hide" is="emby-linkbutton" href="#">${ShowMore}</a>
+                         </div>
++                        <section class="sceneAnalysisDetail hide" aria-label="장면 분석">
++                            <h2 class="sectionTitle">장면 분석</h2>
++                            <p class="sceneAnalysisStatus" role="status"></p>
++                            <div class="sceneAnalysisContent"></div>
++                        </section>
+                         <section class="storyPreviewDetail hide">
+                             <h2 class="storyPreviewTitle">${StoryPreview}</h2>
+                             <div class="storyPreviewContent"></div>
+diff --git a/src/controllers/itemDetails/index.js b/src/controllers/itemDetails/index.js
+--- a/src/controllers/itemDetails/index.js
++++ b/src/controllers/itemDetails/index.js
+@@ -15,6 +15,7 @@
+ import itemContextMenu from 'components/itemContextMenu';
+ import itemHelper from 'components/itemHelper';
+ import { renderMediaInfo as renderDetailedMediaInfo } from 'components/itemMediaInfo/itemMediaInfo';
++import { getItemTranslationStatus } from 'components/translationStatus/translationStatus';
+ import mediaInfo from 'components/mediainfo/mediainfo';
+ import layoutManager from 'components/layoutManager';
+ import listView from 'components/listview/listview';
+@@ -28,6 +29,7 @@
+ import browser from 'scripts/browser';
+ import datetime from 'scripts/datetime';
+ import { createTrickplayPreviewStrip } from 'scripts/trickplayPreviews';
++import { clearSceneAnalysis, renderSceneAnalysis } from 'scripts/sceneAnalysis';
+ import dom from 'utils/dom';
+ import { download } from 'scripts/fileDownloader';
+ import libraryMenu from 'scripts/libraryMenu';
+@@ -46,6 +48,7 @@
+ import 'elements/emby-select/emby-select';
+ 
+ import 'styles/scrollstyles.scss';
++import 'styles/sceneAnalysis.scss';
+ 
+ /** Item types that use a list view for their children. */
+ const LIST_VIEW_TYPES = [
+@@ -242,6 +245,32 @@
+     section.classList.remove('hide');
+ }
+ 
++async function renderTranslationStatus(page, item) {
++    const element = page.querySelector('.zellyfinTranslationStatus');
++    element.dataset.itemId = item.Id;
++    element.classList.add('hide');
++    element.textContent = '';
++
++    const status = await getItemTranslationStatus(item);
++    if (element.dataset.itemId !== item.Id) return;
++    const statusName = status?.status ?? status?.Status;
++    const label = status?.label ?? status?.Label;
++    if (!statusName || !label || !['Completed', 'Stale', 'Queued', 'Processing', 'Failed'].includes(statusName)) return;
++
++    const colors = {
++        Completed: ['rgba(18,112,55,.92)', '#fff'],
++        Stale: ['#a45c00', '#fff'],
++        Queued: ['#2563a8', '#fff'],
++        Processing: ['#2563a8', '#fff'],
++        Failed: ['#a72b2b', '#fff']
++    };
++    const [background, color] = colors[statusName];
++    element.style.background = background;
++    element.style.color = color;
++    element.textContent = label;
++    element.classList.remove('hide');
++}
++
+ function renderVideoSelections(page, mediaSources) {
+     const mediaSource = getSelectedMediaSource(page, mediaSources);
+ 
+@@ -577,6 +606,7 @@
+     renderDetails(page, item, apiClient, params.context);
+     renderTrackSelections(page, instance, item);
+     renderInlineMediaInfo(page, item, user);
++    renderTranslationStatus(page, item);
+ 
+     renderSeriesTimerEditor(page, item, apiClient, user);
+     renderTimerEditor(page, item, apiClient, user);
+@@ -1114,6 +1144,7 @@
+     renderChannelGuide(page, apiClient, item);
+     renderTagline(page, item);
+     renderOverview(page, item);
++    renderSceneAnalysis(page, item, apiClient, playbackManager);
+     renderStoryPreview(page, item, apiClient);
+     renderMiscInfo(page, item);
+     reloadUserDataButtons(page, item);
+@@ -2148,6 +2179,7 @@
+             itemShortcuts.on(view.querySelector('.nameContainer'));
+         });
+         view.addEventListener('viewbeforehide', function () {
++            clearSceneAnalysis(view);
+             itemShortcuts.off(view.querySelector('.nameContainer'));
+             Events.off(apiClient, 'message', onWebSocketMessage);
+             Events.off(playbackManager, 'playerchange', onPlayerChange);
+diff --git a/src/components/playback/playbackmanager.js b/src/components/playback/playbackmanager.js
+--- a/src/components/playback/playbackmanager.js
++++ b/src/components/playback/playbackmanager.js
+@@ -646,7 +646,7 @@
+ function normalizePlayOptions(playOptions) {
+     playOptions.fullscreen = playOptions.fullscreen !== false;
+     // Keep saved progress for display, but always start a new item at the beginning.
+-    playOptions.startPositionTicks = 0;
++    if (playOptions.sceneJump !== true) playOptions.startPositionTicks = 0;
+ }
+ 
+ function truncatePlayOptions(playOptions) {
+diff --git a/src/scripts/sceneAnalysis.js b/src/scripts/sceneAnalysis.js
+new file mode 100644
+--- /dev/null
++++ b/src/scripts/sceneAnalysis.js
+@@ -0,0 +1,122 @@
++const PAGE_SIZE = 30;
++
++function timeLabel(ticks) {
++    const seconds = Math.floor(ticks / 10000000);
++    const hours = Math.floor(seconds / 3600);
++    const minutes = Math.floor(seconds / 60) % 60;
++    const rest = seconds % 60;
++    const pad = value => String(value).padStart(2, '0');
++    return hours ? `${hours}:${pad(minutes)}:${pad(rest)}` : `${pad(minutes)}:${pad(rest)}`;
++}
++
++const STATUS_LABELS = {
++    unprocessed: '아직 분석되지 않았습니다. 시스템 배치 작업에서 처리할 예정입니다.',
++    queued: '분석 대기 중',
++    running: '분석 중',
++    complete: '분석 완료',
++    failed: '분석 실패',
++    stale: '원본 파일이 변경되어 재분석이 필요합니다.'
++};
++
++export function clearSceneAnalysis(page) {
++    const section = page.querySelector('.sceneAnalysisDetail');
++    if (!section) return;
++    clearTimeout(section.refreshTimer);
++    section.dataset.itemId = '';
++}
++
++function renderCards(container, scenes, item, apiClient, playbackManager, start = 0) {
++    const end = Math.min(start + PAGE_SIZE, scenes.length);
++    for (const scene of scenes.slice(start, end)) {
++        const card = document.createElement('article');
++        card.className = 'sceneAnalysisCard';
++
++        const image = document.createElement('img');
++        image.className = 'sceneAnalysisImage';
++        const descriptionText = scene.description ?? scene.Description ?? '';
++        const timeTicks = scene.timeTicks ?? scene.TimeTicks;
++        const imageUrl = scene.imageUrl ?? scene.ImageUrl;
++        image.alt = descriptionText || '장면 미리보기';
++        image.loading = 'lazy';
++        if (imageUrl) image.src = apiClient.getUrl(imageUrl, { ApiKey: apiClient.accessToken() });
++
++        const body = document.createElement('div');
++        body.className = 'sceneAnalysisBody';
++        const jump = document.createElement('button');
++        jump.type = 'button';
++        jump.className = 'sceneAnalysisJump button-flat';
++        jump.textContent = `약 ${timeLabel(timeTicks)}부터 재생`;
++        jump.setAttribute('aria-label', `${timeLabel(timeTicks)} 장면부터 재생`);
++        jump.addEventListener('click', () => playbackManager.play({
++            items: [item],
++            startPositionTicks: timeTicks,
++            sceneJump: true
++        }));
++        const description = document.createElement('p');
++        description.textContent = descriptionText || '장면 설명 없음';
++        const tags = document.createElement('div');
++        tags.className = 'sceneAnalysisTags';
++        for (const tag of scene.tags || scene.Tags || []) {
++            const chip = document.createElement('span');
++            chip.textContent = tag;
++            tags.appendChild(chip);
++        }
++        body.append(jump, description, tags);
++        card.append(image, body);
++        container.appendChild(card);
++    }
++    if (end < scenes.length) {
++        const more = document.createElement('button');
++        more.type = 'button';
++        more.className = 'sceneAnalysisMore button-flat';
++        more.textContent = `장면 더 보기 (${end}/${scenes.length})`;
++        more.addEventListener('click', () => {
++            more.remove();
++            renderCards(container, scenes, item, apiClient, playbackManager, end);
++        });
++        container.appendChild(more);
++    }
++}
++
++export function renderSceneAnalysis(page, item, apiClient, playbackManager) {
++    const section = page.querySelector('.sceneAnalysisDetail');
++    if (!section) return;
++    clearSceneAnalysis(page);
++    section.classList.toggle('hide', item.MediaType !== 'Video');
++    if (item.MediaType !== 'Video') return;
++    section.dataset.itemId = item.Id;
++    const status = section.querySelector('.sceneAnalysisStatus');
++    const content = section.querySelector('.sceneAnalysisContent');
++    status.textContent = '장면 분석 상태를 확인하는 중…';
++    content.replaceChildren();
++
++    const update = async () => {
++        try {
++            const data = await apiClient.getJSON(apiClient.getUrl(`SceneAnalysis/Items/${item.Id}`));
++            if (section.dataset.itemId !== item.Id) return;
++            const state = data.status || data.Status || 'unprocessed';
++            const completed = data.completedSamples ?? data.CompletedSamples ?? 0;
++            const expected = data.expectedSamples ?? data.ExpectedSamples ?? 0;
++            const scenes = data.scenes || data.Scenes || [];
++            const progress = expected ? ` · ${completed}/${expected}` : '';
++            status.textContent = `${STATUS_LABELS[state] || state}${progress}`;
++            if (state === 'failed' && (data.error || data.Error)) status.textContent += ` · ${data.error || data.Error}`;
++            content.replaceChildren();
++            if (scenes.length) {
++                if (state !== 'complete') {
++                    const partial = document.createElement('p');
++                    partial.textContent = '현재까지 분석된 일부 장면입니다. 시각과 태그는 추정값입니다.';
++                    content.appendChild(partial);
++                }
++                const list = document.createElement('div');
++                list.className = 'sceneAnalysisGrid';
++                renderCards(list, scenes, item, apiClient, playbackManager);
++                content.appendChild(list);
++            }
++            if (state === 'running' || state === 'queued') section.refreshTimer = setTimeout(update, 15000);
++        } catch {
++            if (section.dataset.itemId === item.Id) status.textContent = '장면 분석 상태를 불러올 수 없습니다.';
++        }
++    };
++    void update();
++}
+diff --git a/src/styles/sceneAnalysis.scss b/src/styles/sceneAnalysis.scss
+new file mode 100644
+--- /dev/null
++++ b/src/styles/sceneAnalysis.scss
+@@ -0,0 +1,68 @@
++.sceneAnalysisDetail {
++    margin: 1.5em 0;
++}
++
++.sceneAnalysisStatus {
++    opacity: .8;
++}
++
++.sceneAnalysisGrid {
++    display: grid;
++    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
++    gap: 1em;
++}
++
++.sceneAnalysisCard {
++    overflow: hidden;
++    border-radius: .55em;
++    background: rgba(128, 128, 128, .14);
++}
++
++.sceneAnalysisImage {
++    display: block;
++    width: 100%;
++    aspect-ratio: 16 / 9;
++    object-fit: cover;
++}
++
++.sceneAnalysisBody {
++    padding: .7em;
++}
++
++.sceneAnalysisBody p {
++    margin: .45em 0;
++}
++
++.sceneAnalysisTags {
++    display: flex;
++    flex-wrap: wrap;
++    gap: .3em;
++}
++
++.sceneAnalysisTags span {
++    padding: .15em .5em;
++    border-radius: 1em;
++    background: rgba(128, 128, 128, .25);
++    font-size: .85em;
++}
++
++.sceneSearchForm {
++    margin: .5em 0 1em;
++}
++
++.sceneSearchControls {
++    display: flex;
++    flex-wrap: wrap;
++    gap: .5em;
++    margin-top: .4em;
++}
++
++.sceneSearchInput {
++    flex: 1 1 18em;
++    min-width: 0;
++    padding: .65em;
++    border: 1px solid currentColor;
++    border-radius: .4em;
++    background: transparent;
++    color: inherit;
++}

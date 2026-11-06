@@ -10,11 +10,57 @@ index a4814a3..db12cb5 100644
  import { playbackManager } from '../components/playback/playbackmanager';
  import AlphaPicker from '../components/alphaPicker/alphaPicker';
  import { ServerConnections } from 'lib/jellyfin-apiclient';
-@@ -16,6 +15,25 @@ import { CollectionType } from '@jellyfin/sdk/lib/generated-client/models/collec
+@@ -16,6 +15,71 @@ import { CollectionType } from '@jellyfin/sdk/lib/generated-client/models/collec
  import { ItemSortBy } from '@jellyfin/sdk/lib/generated-client/models/item-sort-by';
  import { stopMultiSelect } from 'components/multiSelect/multiSelect';
 
 +const SEEK_COUNT_SORT = 'SeekCount';
++const PLAYBACK_QUERY_PAGE_LIMIT = 500;
++
++function isRecursiveHomeVideosList(item) {
++    return item?.Type === 'CollectionFolder' && item.CollectionType === CollectionType.Homevideos;
++}
++
++async function getAllListItems(instance, params, item) {
++    const items = [];
++    const seenIds = new Set();
++    let startIndex = 0;
++
++    while (true) {
++        const result = await getItems(instance, params, item, null, startIndex, PLAYBACK_QUERY_PAGE_LIMIT);
++        const page = result.Items || result;
++        let addedCount = 0;
++
++        for (const candidate of page) {
++            if (!seenIds.has(candidate.Id)) {
++                seenIds.add(candidate.Id);
++                items.push(candidate);
++                addedCount++;
++            }
++        }
++
++        const totalRecordCount = result.TotalRecordCount;
++        if (!page.length
++            || addedCount === 0
++            || page.length < PLAYBACK_QUERY_PAGE_LIMIT
++            || (Number.isFinite(totalRecordCount) && items.length >= totalRecordCount)) {
++            break;
++        }
++
++        startIndex += page.length;
++    }
++
++    return items;
++}
++
++function shuffleItems(items) {
++    for (let index = items.length - 1; index > 0; index--) {
++        const randomIndex = Math.floor(Math.random() * (index + 1));
++        [items[index], items[randomIndex]] = [items[randomIndex], items[index]];
++    }
++
++    return items;
++}
 +
 +function getSeekCountItems(instance, params, item, startIndex, limit) {
 +    const apiClient = ServerConnections.getApiClient(params.serverId);
@@ -47,7 +93,20 @@ index a4814a3..db12cb5 100644
      instance.queryRecursive = false;
      if (params.type === 'Recordings') {
          return apiClient.getLiveTvRecordings(getInitialLiveTvQuery(instance, params, startIndex, limit));
-@@ -452,62 +474,76 @@ class ItemsView {
+@@ -331,6 +353,12 @@ function getItems(instance, params, item, sortBy, startIndex, limit) {
+         ParentId: item.Id,
+         SortBy: sortBy
+     };
++
++    if (item.Type === 'CollectionFolder' && item.CollectionType === CollectionType.Homevideos) {
++        instance.queryRecursive = true;
++        query.IncludeItemTypes = 'Video';
++        query.Recursive = true;
++    }
+
+     if (sortBy === 'Random') {
+         instance.queryRecursive = true;
+@@ -452,62 +480,76 @@ class ItemsView {
          }
 
          let isLoading = false;
@@ -160,20 +219,147 @@ index a4814a3..db12cb5 100644
                  return result;
              }).finally(() => {
                  isLoading = false;
-@@ -795,12 +831,6 @@ class ItemsView {
-             }
-         }
-
+@@ -744,61 +832,70 @@ class ItemsView {
+-        function play() {
+-            const currentItem = self.currentItem;
+-
+-            if (currentItem && !self.hasFilters) {
+-                const values = self.getSortValues();
+-                playbackManager.play({
+-                    items: [currentItem],
+-                    queryOptions: {
+-                        SortBy: values.sortBy,
+-                        SortOrder: values.sortOrder
+-                    },
+-                    autoplay: true
+-                });
+-            } else {
+-                getItems(self, self.params, currentItem, null, 0, 300).then(function (result) {
+-                    playbackManager.play({
+-                        items: result.Items,
+-                        autoplay: true
+-                    });
+-                });
+-            }
+-        }
+-
+-        function queue() {
+-            const currentItem = self.currentItem;
+-
+-            if (currentItem && !self.hasFilters) {
+-                playbackManager.queue({
+-                    items: [currentItem]
+-                });
+-            } else {
+-                getItems(self, self.params, currentItem, null, 0, 300).then(function (result) {
+-                    playbackManager.queue({
+-                        items: result.Items
+-                    });
+-                });
+-            }
+-        }
+-
+-        function shuffle() {
+-            const currentItem = self.currentItem;
+-
+-            if (currentItem && !self.hasFilters) {
+-                playbackManager.shuffle(currentItem);
+-            } else {
+-                getItems(self, self.params, currentItem, 'Random', 0, 300).then(function (result) {
+-                    playbackManager.play({
+-                        items: result.Items,
+-                        autoplay: true
+-                    });
+-                });
+-            }
+-        }
+-
 -        function autoFocus() {
 -            import('../components/autoFocuser').then(({ default: autoFocuser }) => {
 -                autoFocuser.autoFocus(view);
 -            });
 -        }
 -
++        async function play() {
++            const currentItem = self.currentItem;
++
++            if (isRecursiveHomeVideosList(currentItem)) {
++                const items = await getAllListItems(self, self.params, currentItem);
++                return playbackManager.play({
++                    items,
++                    autoplay: true
++                });
++            } else if (currentItem && !self.hasFilters) {
++                const values = self.getSortValues();
++                return playbackManager.play({
++                    items: [currentItem],
++                    queryOptions: {
++                        SortBy: values.sortBy,
++                        SortOrder: values.sortOrder
++                    },
++                    autoplay: true
++                });
++            } else {
++                return getItems(self, self.params, currentItem, null, 0, 300).then(function (result) {
++                    return playbackManager.play({
++                        items: result.Items,
++                        autoplay: true
++                    });
++                });
++            }
++        }
++
++        async function queue() {
++            const currentItem = self.currentItem;
++
++            if (isRecursiveHomeVideosList(currentItem)) {
++                const items = await getAllListItems(self, self.params, currentItem);
++                return playbackManager.queue({ items });
++            } else if (currentItem && !self.hasFilters) {
++                return playbackManager.queue({
++                    items: [currentItem]
++                });
++            } else {
++                return getItems(self, self.params, currentItem, null, 0, 300).then(function (result) {
++                    return playbackManager.queue({
++                        items: result.Items
++                    });
++                });
++            }
++        }
++
++        async function shuffle() {
++            const currentItem = self.currentItem;
++
++            if (isRecursiveHomeVideosList(currentItem)) {
++                const items = shuffleItems(await getAllListItems(self, self.params, currentItem));
++                return playbackManager.play({
++                    items,
++                    autoplay: true
++                });
++            } else if (currentItem && !self.hasFilters) {
++                return playbackManager.shuffle(currentItem);
++            } else {
++                return getItems(self, self.params, currentItem, 'Random', 0, 300).then(function (result) {
++                    return playbackManager.play({
++                        items: result.Items,
++                        autoplay: true
++                    });
++                });
++            }
++        }
++
          const self = this;
-         self.params = params;
-         this.itemsContainer = view.querySelector('.itemsContainer');
-@@ -932,6 +962,7 @@ class ItemsView {
+@@ -877,6 +913,8 @@ class ItemsView {
+
+                     if (refresh) {
+                         focusManager.autoFocus(self.itemsContainer);
++                    } else {
++                        updatePaging(0, loadedItems.length, query.Limit);
+                     }
+                 });
+
+@@ -932,6 +970,7 @@ class ItemsView {
              });
          });
          view.addEventListener('viewhide', function () {
@@ -181,7 +367,7 @@ index a4814a3..db12cb5 100644
              const itemsContainer = self.itemsContainer;
 
              if (itemsContainer) {
-@@ -946,6 +977,7 @@ class ItemsView {
+@@ -946,6 +985,7 @@ class ItemsView {
              }
          });
          view.addEventListener('viewdestroy', function () {
@@ -189,7 +375,7 @@ index a4814a3..db12cb5 100644
              if (self.listController) {
                  self.listController.destroy();
              }
-@@ -1062,6 +1094,13 @@ class ItemsView {
+@@ -1062,6 +1102,13 @@ class ItemsView {
              sortBy.push(option);
          }
 
@@ -203,6 +389,21 @@ index a4814a3..db12cb5 100644
          sortBy.push({
              name: globalize.translate('ReleaseDate'),
              value: [ItemSortBy.ProductionYear, ItemSortBy.PremiereDate, ItemSortBy.SortName].join(',')
+diff --git a/src/components/playback/playbackmanager.js b/src/components/playback/playbackmanager.js
+index 8c69228..ef79543 100644
+--- a/src/components/playback/playbackmanager.js
++++ b/src/components/playback/playbackmanager.js
+@@ -1937,8 +1937,8 @@ export class PlaybackManager {
+                     Filters: 'IsNotFolder',
+                     Recursive: true,
+                     SortBy: options.shuffle ? 'Random' : 'SortName',
+-                    // Only include Photos because we do not handle mixed queues currently
+-                    MediaTypes: 'Photo',
++                    // Zellyfin presents Home Videos libraries as recursive video-only lists.
++                    MediaTypes: 'Video',
+                     Limit: UNLIMITED_ITEMS
+                 }, queryOptions));
+             } else if (firstItem.IsFolder && firstItem.CollectionType === 'musicvideos') {
 diff --git a/src/strings/en-us.json b/src/strings/en-us.json
 index 28fbf0b..077be9d 100644
 --- a/src/strings/en-us.json

@@ -1,0 +1,153 @@
+diff --git a/src/scripts/cardStoryCarousel.js b/src/scripts/cardStoryCarousel.js
+--- a/src/scripts/cardStoryCarousel.js
++++ b/src/scripts/cardStoryCarousel.js
+@@ -4,9 +4,9 @@
+ const items = new Map();
+ const loads = new WeakMap();
+ let observer;
++let playbackObserver;
+ let mutations;
+-let activeCard;
+-let cycleTimer;
++const activeCards = new Map();
+ 
+ export function rememberCardStoryItem(item, serverId) {
+     if (item.MediaType !== 'Video' || !item.RunTimeTicks) return;
+@@ -59,13 +59,12 @@
+     return request;
+ }
+ 
+-function stopCarousel() {
+-    if (cycleTimer !== undefined) {
+-        window.clearTimeout(cycleTimer);
+-        cycleTimer = undefined;
+-    }
+-    activeCard?.classList.remove('storyPreviewPlaying');
+-    activeCard = undefined;
++function stopCarousel(card) {
++    const state = activeCards.get(card);
++    if (!state) return;
++    if (state.timer !== undefined) window.clearTimeout(state.timer);
++    card.classList.remove('storyPreviewPlaying');
++    activeCards.delete(card);
+ }
+ 
+ function isOnScreen(card) {
+@@ -75,13 +74,20 @@
+ }
+ 
+ function startCarousel(card) {
+-    if (activeCard === card) return;
+-    stopCarousel();
+-    activeCard = card;
++    if (activeCards.has(card) || !card.isConnected || document.hidden || !isOnScreen(card)) return;
++    const state = { timer: undefined };
++    activeCards.set(card, state);
+     void loadPreview(card).then(strip => {
+-        if (activeCard !== card || !card.isConnected || !strip) return;
++        if (activeCards.get(card) !== state) return;
++        if (!card.isConnected || document.hidden || !isOnScreen(card) || !strip) {
++            stopCarousel(card);
++            return;
++        }
+         const frames = Array.from(strip.querySelectorAll('.storyPreviewFrame'));
+-        if (!frames.length) return;
++        if (!frames.length) {
++            stopCarousel(card);
++            return;
++        }
+ 
+         let index = 0;
+         frames.forEach((frame, frameIndex) => {
+@@ -91,16 +97,17 @@
+         if (frames.length === 1 || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+ 
+         const advance = () => {
+-            if (activeCard !== card || !card.isConnected || document.hidden || !isOnScreen(card)) {
+-                stopCarousel();
++            if (activeCards.get(card) !== state) return;
++            if (!card.isConnected || document.hidden || !isOnScreen(card)) {
++                stopCarousel(card);
+                 return;
+             }
+             frames[index].classList.remove('storyPreviewFrame-active');
+             index = (index + 1) % frames.length;
+             frames[index].classList.add('storyPreviewFrame-active');
+-            cycleTimer = window.setTimeout(advance, 2200);
++            state.timer = window.setTimeout(advance, 2200);
+         };
+-        cycleTimer = window.setTimeout(advance, 2200);
++        state.timer = window.setTimeout(advance, 2200);
+     });
+ }
+ 
+@@ -108,7 +115,8 @@
+     if (card.dataset.storyPreviewObserved) return;
+     card.dataset.storyPreviewObserved = 'true';
+     if (observer) observer.observe(card);
+-    else void loadPreview(card);
++    else void loadPreview(card).then(() => startCarousel(card));
++    if (playbackObserver) playbackObserver.observe(card);
+ }
+ 
+ function observeAddedCards(node) {
+@@ -117,8 +125,12 @@
+     node.querySelectorAll?.('.card[data-storypreview="true"]').forEach(observeCard);
+ }
+ 
+-function cardFor(target) {
+-    return target?.closest?.('.card[data-storypreview="true"]');
++function refreshVisibleCards() {
++    if (document.hidden) return;
++    document.querySelectorAll('.card[data-storypreview="true"]').forEach(card => {
++        if (isOnScreen(card)) startCarousel(card);
++        else stopCarousel(card);
++    });
+ }
+ 
+ export function installCardStoryCarousel() {
+@@ -131,6 +143,12 @@
+                 void loadPreview(entry.target);
+             }
+         }, { rootMargin: '300px 0px' });
++        playbackObserver = new window.IntersectionObserver(entries => {
++            for (const entry of entries) {
++                if (entry.isIntersecting) startCarousel(entry.target);
++                else stopCarousel(entry.target);
++            }
++        });
+     }
+     mutations = new window.MutationObserver(records => {
+         for (const record of records) record.addedNodes.forEach(observeAddedCards);
+@@ -138,23 +156,13 @@
+     mutations.observe(document.body, { childList: true, subtree: true });
+     document.querySelectorAll('.card[data-storypreview="true"]').forEach(observeCard);
+ 
+-    document.addEventListener('mouseover', event => {
+-        const card = cardFor(event.target);
+-        if (card) startCarousel(card);
++    document.addEventListener('visibilitychange', () => {
++        if (document.hidden) activeCards.forEach((_, card) => stopCarousel(card));
++        else refreshVisibleCards();
+     });
+-    document.addEventListener('mouseout', event => {
+-        const card = cardFor(event.target);
+-        if (card === activeCard && !card.contains(event.relatedTarget)) stopCarousel();
+-    });
+-    document.addEventListener('focusin', event => {
+-        const card = cardFor(event.target);
+-        if (card) startCarousel(card);
+-    });
+-    document.addEventListener('focusout', event => {
+-        const card = cardFor(event.target);
+-        if (card === activeCard && !card.contains(event.relatedTarget)) stopCarousel();
+-    });
+-    document.addEventListener('visibilitychange', () => {
+-        if (document.hidden) stopCarousel();
+-    });
++    if (!playbackObserver) {
++        window.addEventListener('scroll', refreshVisibleCards, { passive: true });
++        window.addEventListener('resize', refreshVisibleCards);
++        refreshVisibleCards();
++    }
+ }

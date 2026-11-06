@@ -1,0 +1,290 @@
+diff --git a/src/apps/stable/features/search/components/SearchFields.tsx b/src/apps/stable/features/search/components/SearchFields.tsx
+--- a/src/apps/stable/features/search/components/SearchFields.tsx
++++ b/src/apps/stable/features/search/components/SearchFields.tsx
+@@ -1,4 +1,5 @@
+-import React, { type ChangeEvent, type FC, useCallback, useRef } from 'react';
++import React, { type ChangeEvent, type FC, useCallback, useEffect, useRef, useState } from 'react';
++import { useApi } from 'hooks/useApi';
+ import AlphaPicker from 'components/alphaPicker/AlphaPickerComponent';
+ import Input from 'elements/emby-input/Input';
+ import layoutManager from 'components/layoutManager';
+@@ -7,10 +8,10 @@
+ import 'styles/flexstyles.scss';
+ import './searchfields.scss';
+ 
+-export type SearchMode = 'all' | 'metadata' | 'performer' | 'filename';
++export type SearchMode = 'all' | 'metadata' | 'scene' | 'performer' | 'filename';
+ 
+ export function getSearchMode(value: string): SearchMode {
+-    if (value === 'metadata' || value === 'performer' || value === 'filename') return value;
++    if (value === 'metadata' || value === 'scene' || value === 'performer' || value === 'filename') return value;
+     return 'all';
+ }
+ 
+@@ -27,7 +28,19 @@
+     mode,
+     query
+ }) => {
++    const { __legacyApiClient__: apiClient } = useApi();
++    const [keywords, setKeywords] = useState<{ keyword: string, count: number }[]>([]);
+     const inputRef = useRef<HTMLInputElement>(null);
++
++    useEffect(() => {
++        if (!apiClient || mode !== 'metadata') return;
++        let active = true;
++        void apiClient.getJSON(apiClient.getUrl('SceneAnalysis/Keywords', { limit: 40 }))
++            .then((data: { keyword: string, count: number }[]) => {
++                if (active) setKeywords(data);
++            }).catch(() => { if (active) setKeywords([]); });
++        return () => { active = false; };
++    }, [apiClient, mode]);
+ 
+     const onAlphaPicked = useCallback((e: Event) => {
+         const value = (e as CustomEvent).detail.value;
+@@ -62,7 +75,7 @@
+                         className='searchfields-txtSearch'
+                         type='text'
+                         data-keyboard='true'
+-                        placeholder='파일명·장면·배우 이름 검색'
++                        placeholder='파일명·시놉시스·장면·배우 이름 검색'
+                         autoComplete='off'
+                         maxLength={120}
+                         // eslint-disable-next-line jsx-a11y/no-autofocus
+@@ -77,12 +90,20 @@
+                 <select id='searchModeSelect' className='emby-select' aria-label='검색 대상'
+                     value={mode} onChange={onSearchModeChange}>
+                     <option value='all'>전체</option>
+-                    <option value='metadata'>메타 정보 (시놉시스·장면)</option>
++                    <option value='metadata'>작품 정보·키워드</option>
++                    <option value='scene'>장면 분석</option>
+                     <option value='performer'>배우 이름</option>
+                     <option value='filename'>파일 이름</option>
+                 </select>
+                 {mode === 'performer' && <span>현재 색인된 배우: 아이자와 루루</span>}
+             </div>
++            {mode === 'metadata' && keywords.length > 0 && <div className='synopsisKeywordCloud' aria-label='시놉시스 키워드'>
++                {keywords.map(({ keyword, count }) => <button key={keyword} type='button'
++                    className='button-flat synopsisKeywordButton' onClick={() => onSearch(keyword)}
++                    title={`${count}개 작품`}>
++                    {keyword} <small>{count}</small>
++                </button>)}
++            </div>}
+             {layoutManager.tv && !browser.tv
+                 && <AlphaPicker onAlphaPicked={onAlphaPicked} />
+             }
+diff --git a/src/apps/stable/features/search/components/SearchResults.tsx b/src/apps/stable/features/search/components/SearchResults.tsx
+--- a/src/apps/stable/features/search/components/SearchResults.tsx
++++ b/src/apps/stable/features/search/components/SearchResults.tsx
+@@ -31,6 +31,10 @@
+     durationTicks: number;
+     matchedInName: boolean;
+     matchedInMetadata: boolean;
++    synopsis?: string | null;
++    synopsisCode?: string | null;
++    synopsisKeywords?: string[];
++    synopsisReviewStatus?: string | null;
+     matchedPerformerCode?: string | null;
+     performerSource?: string | null;
+     scenes: UnifiedScene[];
+@@ -82,7 +86,7 @@
+         matchLabels.push(`${item.performerSource || '출연작 목록'} 품번 ${item.matchedPerformerCode} 일치`);
+     }
+     if (item.matchedInName) matchLabels.push('파일명 일치');
+-    if (item.matchedInMetadata) matchLabels.push('시놉시스 일치');
++    if (item.matchedInMetadata) matchLabels.push(item.synopsis ? '시놉시스 일치' : '메타 정보 일치');
+     if (item.scenes.length > 0) matchLabels.push('장면 일치');
+     return <article className='sceneAnalysisCard'>
+         {item.scenes[0] && <img className='sceneAnalysisImage' loading='lazy'
+@@ -93,13 +97,19 @@
+             <p className='unifiedSearchMatch'>
+                 {matchLabels.join(' · ')}
+             </p>
++            {item.synopsis && <p className='synopsisSearchExcerpt'>{item.synopsis}</p>}
++            {item.synopsisKeywords && item.synopsisKeywords.length > 0 && <div className='synopsisSearchKeywords'>
++                {item.synopsisKeywords.slice(0, 10).map(keyword => <Link key={keyword}
++                    to={`/search?query=${encodeURIComponent(keyword)}&mode=metadata`}>{keyword}</Link>)}
++            </div>}
+             {item.scenes.map(scene => <UnifiedSceneRow key={scene.timeTicks} item={item} scene={scene} apiClient={apiClient} />)}
+         </div>
+     </article>;
+ };
+ 
+ const RESULT_TITLES: Record<SearchMode, string> = {
+-    all: '영상 및 장면', metadata: '메타 정보', performer: '배우 출연작', filename: '파일 이름'
++    all: '영상·작품 정보·장면', metadata: '작품 정보·키워드', scene: '장면 분석',
++    performer: '배우 출연작', filename: '파일 이름'
+ };
+ 
+ function hasNoSearchResults(mode: SearchMode, standardCount: number, unifiedCount: number,
+diff --git a/src/apps/stable/features/search/components/searchfields.scss b/src/apps/stable/features/search/components/searchfields.scss
+--- a/src/apps/stable/features/search/components/searchfields.scss
++++ b/src/apps/stable/features/search/components/searchfields.scss
+@@ -27,3 +27,24 @@
+         opacity: 0.75;
+     }
+ }
++
++.synopsisKeywordCloud {
++    display: flex;
++    flex-wrap: wrap;
++    gap: .35em;
++    max-width: 60em;
++    max-height: 8em;
++    overflow-y: auto;
++    margin: .7em auto 0;
++}
++
++.synopsisKeywordButton {
++    padding: .25em .6em;
++    border-radius: 1em;
++    background: rgba(128, 128, 128, .18);
++    cursor: pointer;
++}
++
++.synopsisKeywordButton small {
++    opacity: .7;
++}
+diff --git a/src/controllers/itemDetails/index.js b/src/controllers/itemDetails/index.js
+--- a/src/controllers/itemDetails/index.js
++++ b/src/controllers/itemDetails/index.js
+@@ -30,6 +30,7 @@
+ import datetime from 'scripts/datetime';
+ import { createStoryPreviewStrip } from 'scripts/trickplayPreviews';
+ import { clearSceneAnalysis, renderSceneAnalysis } from 'scripts/sceneAnalysis';
++import { renderSynopsis } from 'scripts/synopsisDetails';
+ import dom from 'utils/dom';
+ import { download } from 'scripts/fileDownloader';
+ import libraryMenu from 'scripts/libraryMenu';
+@@ -1148,6 +1149,7 @@
+     renderChannelGuide(page, apiClient, item);
+     renderTagline(page, item);
+     renderOverview(page, item);
++    renderSynopsis(page, item, apiClient);
+     renderSceneAnalysis(page, item, apiClient, playbackManager);
+     renderStoryPreview(page, item, apiClient);
+     renderMiscInfo(page, item);
+diff --git a/src/controllers/itemDetails/index.html b/src/controllers/itemDetails/index.html
+--- a/src/controllers/itemDetails/index.html
++++ b/src/controllers/itemDetails/index.html
+@@ -122,6 +122,16 @@
+                         <div class="overview-controls">
+                             <a class="overview-expand hide" is="emby-linkbutton" href="#">${ShowMore}</a>
+                         </div>
++                        <section class="synopsisDetail hide" aria-label="작품 시놉시스">
++                            <h2 class="sectionTitle">작품 시놉시스</h2>
++                            <p class="synopsisDetailMeta"></p>
++                            <p class="synopsisDetailText"></p>
++                            <div class="synopsisDetailKeywords"></div>
++                            <details class="synopsisDetailOriginal hide">
++                                <summary>일본어 원문</summary>
++                                <p></p>
++                            </details>
++                        </section>
+                         <section class="sceneAnalysisDetail hide" aria-label="장면 분석">
+                             <h2 class="sectionTitle">장면 분석</h2>
+                             <p class="sceneAnalysisStatus" role="status"></p>
+diff --git a/src/styles/sceneAnalysis.scss b/src/styles/sceneAnalysis.scss
+--- a/src/styles/sceneAnalysis.scss
++++ b/src/styles/sceneAnalysis.scss
+@@ -122,3 +122,43 @@
+     margin-top: 0;
+     font-size: .9em;
+ }
++
++.synopsisSearchExcerpt {
++    white-space: normal;
++    line-height: 1.5;
++    overflow-wrap: anywhere;
++}
++
++.synopsisSearchKeywords,
++.synopsisDetailKeywords {
++    display: flex;
++    flex-wrap: wrap;
++    gap: .35em;
++    margin: .5em 0;
++}
++
++.synopsisSearchKeywords a,
++.synopsisDetailKeywords span {
++    padding: .2em .55em;
++    border-radius: 1em;
++    background: rgba(128, 128, 128, .22);
++    font-size: .85em;
++}
++
++.synopsisDetailText {
++    white-space: pre-wrap;
++    line-height: 1.6;
++}
++
++.synopsisDetail {
++    margin: 1.5em 0;
++}
++
++.synopsisDetailMeta {
++    opacity: .7;
++    font-size: .85em;
++}
++
++.synopsisDetailOriginal {
++    margin-top: .6em;
++}
+diff --git a/src/scripts/synopsisDetails.js b/src/scripts/synopsisDetails.js
+new file mode 100644
+--- /dev/null
++++ b/src/scripts/synopsisDetails.js
+@@ -0,0 +1,53 @@
++export function renderSynopsis(page, item, apiClient) {
++    const section = page.querySelector('.synopsisDetail');
++    if (!section) return;
++    section.dataset.itemId = item.Id;
++    section.classList.add('hide');
++    if (item.MediaType !== 'Video') return;
++
++    const text = section.querySelector('.synopsisDetailText');
++    const meta = section.querySelector('.synopsisDetailMeta');
++    const tags = section.querySelector('.synopsisDetailKeywords');
++    const original = section.querySelector('.synopsisDetailOriginal');
++    const originalText = original.querySelector('p');
++    text.textContent = '';
++    meta.textContent = '';
++    tags.replaceChildren();
++    original.classList.add('hide');
++
++    void apiClient.getJSON(apiClient.getUrl('SceneAnalysis/Items/' + item.Id + '/Synopsis'))
++        .then(data => {
++            if (section.dataset.itemId !== item.Id) return;
++            section.classList.remove('hide');
++            text.textContent = data.synopsis || '';
++            const status = data.reviewStatus === 'needs_review'
++                ? '자동 정리 · 추가 검수 필요' : '기계 번역 · 자동 정리';
++            meta.textContent = (data.code || '') + ' · ' + status;
++            for (const keyword of data.keywords || []) {
++                const chip = document.createElement('span');
++                chip.textContent = keyword;
++                tags.appendChild(chip);
++            }
++            if (data.originalJapanese) {
++                originalText.textContent = data.originalJapanese;
++                original.classList.remove('hide');
++            }
++            if (data.sourceUrl) {
++                try {
++                    const url = new URL(data.sourceUrl);
++                    if (url.hostname === 'www.dmm.co.jp') {
++                        const source = document.createElement('a');
++                        source.href = url.href;
++                        source.target = '_blank';
++                        source.rel = 'noopener noreferrer';
++                        source.textContent = '원문 출처';
++                        meta.append(' · ', source);
++                    }
++                } catch {
++                    // A malformed source URL should not hide the synopsis.
++                }
++            }
++        }).catch(() => {
++            if (section.dataset.itemId === item.Id) section.classList.add('hide');
++        });
++}

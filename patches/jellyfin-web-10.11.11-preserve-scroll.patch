@@ -1,0 +1,104 @@
+diff --git a/src/controllers/favorites.js b/src/controllers/favorites.js
+--- a/src/controllers/favorites.js
++++ b/src/controllers/favorites.js
+@@ -323,7 +323,7 @@
+                 button.classList.toggle('hide', !pager.hasMore);
+                 button.textContent = globalize.translate('ButtonMore');
+                 if (pager.hasMore && !itemsContainer.paused) observer.observe(button);
+-                return result;
++                return next ? { ...result, AppendItems: true, Items: result.AppendedItems } : result;
+             }).catch(error => {
+                 button.classList.remove('hide');
+                 button.textContent = globalize.translate('Retry');
+diff --git a/src/controllers/list.js b/src/controllers/list.js
+--- a/src/controllers/list.js
++++ b/src/controllers/list.js
+@@ -648,14 +648,15 @@
+                 disconnectInfiniteScrollObserver();
+             }
+             const generation = ++requestGeneration;
++            const requestedStartIndex = query.StartIndex;
+             isLoading = true;
+ 
+-            latestRequest = getItems(self, params, self.currentItem, null, query.StartIndex, query.Limit).then(function (result) {
++            latestRequest = getItems(self, params, self.currentItem, null, requestedStartIndex, query.Limit).then(function (result) {
+                 if (generation !== requestGeneration) {
+                     return latestRequest;
+                 }
+                 const newItems = result.Items || result;
+-                const resultStartIndex = result.StartIndex || 0;
++                const resultStartIndex = result.StartIndex ?? requestedStartIndex;
+ 
+                 if (resultStartIndex === 0) {
+                     loadedItems = newItems;
+@@ -670,8 +671,9 @@
+                 updatePaging(resultStartIndex, newItems.length, query.Limit);
+ 
+                 if (result.Items) {
+-                    result.Items = loadedItems;
+-                    result.StartIndex = 0;
++                    result.AppendItems = resultStartIndex > 0;
++                    result.Items = result.AppendItems ? newItems : loadedItems;
++                    result.StartIndex = resultStartIndex;
+                 }
+ 
+                 return result;
+diff --git a/src/elements/emby-itemscontainer/emby-itemscontainer.js b/src/elements/emby-itemscontainer/emby-itemscontainer.js
+--- a/src/elements/emby-itemscontainer/emby-itemscontainer.js
++++ b/src/elements/emby-itemscontainer/emby-itemscontainer.js
+@@ -422,10 +422,11 @@
+ 
+ function onDataFetched(result) {
+     const items = result.Items || result;
++    const appendItems = result.AppendItems === true && this.childElementCount > 0;
+ 
+     const parentContainer = this.parentContainer;
+     if (parentContainer) {
+-        if (items.length) {
++        if (items.length || appendItems) {
+             parentContainer.classList.remove('hide');
+         } else {
+             parentContainer.classList.add('hide');
+@@ -441,11 +442,15 @@
+         focusId = activeElement.getAttribute('data-id');
+     }
+ 
+-    this.innerHTML = this.getItemsHtml(items);
++    if (appendItems) {
++        this.insertAdjacentHTML('beforeend', this.getItemsHtml(items));
++    } else {
++        this.innerHTML = this.getItemsHtml(items);
++    }
+ 
+     imageLoader.lazyChildren(this);
+ 
+-    if (hasActiveElement) {
++    if (hasActiveElement && !appendItems) {
+         setFocus(this, focusId);
+     }
+ 
+diff --git a/src/scripts/pagedItems.js b/src/scripts/pagedItems.js
+--- a/src/scripts/pagedItems.js
++++ b/src/scripts/pagedItems.js
+@@ -36,10 +36,12 @@
+                 const combined = append ? items.slice() : [];
+                 const seen = new Set(combined.map(item => item.Id));
+                 let added = 0;
++                const appendedItems = [];
+                 for (const item of page) {
+                     if (!seen.has(item.Id)) {
+                         seen.add(item.Id);
+                         combined.push(item);
++                        appendedItems.push(item);
+                         added++;
+                     }
+                 }
+@@ -48,7 +50,7 @@
+                 hasMore = page.length > 0 && (!append || added > 0)
+                     && (Number.isFinite(result.TotalRecordCount) ?
+                         offset < result.TotalRecordCount : page.length >= limit);
+-                return { ...result, Items: items, StartIndex: 0 };
++                return { ...result, Items: items, AppendedItems: appendedItems, StartIndex: 0 };
+             }).finally(() => {
+                 if (current === generation) loading = false;
+             });
